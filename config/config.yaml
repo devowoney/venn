@@ -1,0 +1,78 @@
+# VENN v0 training config (Hydra). Every ML hyperparameter lives here (D-014).
+# Override on the CLI, e.g.:  python -m src.train.train train.max_steps=400 train.lambda_white=5
+defaults:
+  - _self_
+
+seed: 0
+device: cuda            # falls back to cpu automatically if CUDA is unavailable
+
+# --- synthetic generator (GenConfig fields; D-009 / D-013) ---------------------------------
+data:
+  T: 2000
+  H: 64
+  W: 64
+  n_stationary: 1
+  n_cyclic: 3
+  n_chaotic: 6
+  cyclic_periods: [60.0, 140.0, 300.0]
+  ou_tau: 200.0
+  lorenz_dt: 0.01
+  lorenz_subsample: 5
+  sst_lag: 3
+  sst_shared_w: 0.8
+  sst_chaotic_w: 0.5
+  sst_blur_sigma: 2.0
+  obs_noise: 0.05
+
+# --- selection-mask encoder (D-015) --------------------------------------------------------
+model:
+  K: 16                 # number of channels; first smoke was K=16, go deeper later
+  temp0: 1.0            # initial sigmoid temperature
+  temp1: 1.0            # final temperature. 1.0 = NO anneal (default): annealing to 0.1
+                        # saturates the sigmoids and freezes the masks before they organize
+                        # (offcorr2 stalls at 0.53 vs 0.27 un-annealed). D-016.
+  norm: none            # s_i normalization: none (whitening owns scale) | sqrt | softcount(ablation)
+  init: multiscale      # multiscale (smooth footprints, own scale each) | random | flat(degenerate)
+  init_std: 1.5         # logit std at init -> masks span a real 0..1 range, not all ~0.5
+  sigma_min: 1.0        # smallest init footprint length scale, in grid cells
+  sigma_max: 16.0       # largest init footprint length scale (basin-scale band)
+  signed: false         # DIAGNOSTIC ABLATION only: tanh masks in [-1,1] (D-005 rejects these)
+  # D-020 scale ladder: per-channel target footprint, as a fraction of the (V,H,W) volume.
+  # ch0 -> size_max_frac (basin-scale), ch(K-1) -> size_min_frac (small energetic patch).
+  size_max_frac: 0.30   # largest target footprint  (~2458 of 8192 cells)
+  size_min_frac: 0.002  # smallest target footprint (~16 cells)
+
+# --- training (D-015) ----------------------------------------------------------------------
+train:
+  max_steps: 5000       # ~2500 steps to converge decorrelation; 5000 is safe
+  batch: 128            # consecutive pairs per step; must be >= 2*K for full-rank covariance
+  lr: 0.05
+  whitening: corr       # corr (differentiable off-diag decorrelation; DEFAULT, D-017)
+                        # | hard (detached ZCA -- ablation, all channels merge into one)
+                        # | soft (raw-cov penalty -- ablation, masks collapse to 0)
+  white_eps: 1.0e-3     # eigenvalue floor for the ZCA inverse-sqrt (on the CORRELATION matrix)
+  lambda_slow: 1.0      # weight on the slowness Rayleigh quotient. NOTE: at init its gradient is
+                        # ~24x weaker than the decorrelation term's, so raise it to give slowness
+                        # real influence over the solution.
+  lambda_white: 1.0     # weight on mean off-diagonal corr^2 (the reference scale for the others)
+  grad_clip: 10.0       # global grad-norm clip; tames spikes from near-degenerate directions
+  lambda_var: 1.0       # anti-death hinge: relu(1 - std(s_i/sqrt(count_i)))^2, mean over channels
+  lambda_energy: 0.2    # D-019 energy floor: relu(1 - e_i/e_ref)^2, e_i = var(s_i)/count_i^2.
+                        # Without it L_slow drives every kernel to the dead domain edges (F-6).
+  lambda_recon: 0.3     # D-019 coverage: 1 - R^2 of the best per-batch linear decode of the field
+                        # from [1,S]. Also penalizes redundant channels. 0 disables (skips the solve).
+  lambda_size: 0.3      # D-020 scale ladder: relu(|log(count_i/target_i)| - log(size_tol))^2.
+                        # 0 disables -> every mask shrinks to a tiny patch (median 28 cells).
+  size_tol: 2.0         # free within this factor of the target; penalized only outside it
+  recon_ridge: 1.0e-3   # ridge on the K+1 normal equations (relative to B; channels standardized)
+  # lambda_energy / lambda_recon defaults are GRADIENT-MATCHED to lambda_white at init, measured
+  # per-term with tmp/g.py: |g_slow|=6.7e-6, |g_white|=1.7e-4, |g_energy|=8.8e-4, |g_recon|=5.0e-4.
+  # Balance the GRADIENTS, not the loss values -- the values differ by 300x and mislead.
+  log_every: 50
+
+# run dir + all artifacts + TensorBoard land under ./.tmps/ (D-014)
+hydra:
+  run:
+    dir: ${hydra:runtime.cwd}/.tmps/runs/${now:%Y%m%d_%H%M%S}
+  job:
+    chdir: true           # Hydra>=1.2 defaults to false -> artifacts would land in the repo root

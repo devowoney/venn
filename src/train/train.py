@@ -1,0 +1,236 @@
+"""VENN v0 training: learn selection masks with slowness + whitening (SOP 02, D-015).
+
+Online pair-minibatch SGD. All hyperparameters come from ./config/config.yaml (Hydra, D-014).
+Artifacts + TensorBoard logs are written under ./.tmps/runs/<timestamp>/ (Hydra run dir).
+
+Run:  conda run -n oceanai python -m src.train.train
+      conda run -n oceanai python -m src.train.train train.max_steps=400 train.lambda_white=5
+"""
+from __future__ import annotations
+
+import json
+import os
+import sys
+
+import numpy as np
+import torch
+
+# make `src` importable even though Hydra changes the working directory to the run dir
+_REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, _REPO)
+
+import hydra                                              # noqa: E402
+from omegaconf import DictConfig, OmegaConf               # noqa: E402
+from torch.utils.tensorboard import SummaryWriter         # noqa: E402
+
+from src.data.synthetic import GenConfig, generate_field  # noqa: E402
+from src.models.encoder import SelectionEncoder            # noqa: E402
+
+
+def _anneal(step: int, total: int, t0: float, t1: float) -> float:
+    """Geometric temperature schedule t0 -> t1 over `total` steps."""
+    frac = min(1.0, step / max(1, total - 1))
+    return float(t0 * (t1 / t0) ** frac)
+
+
+@hydra.main(version_base=None, config_path="../../config", config_name="config")
+def main(cfg: DictConfig) -> None:
+    torch.manual_seed(cfg.seed)
+    device = cfg.device if (cfg.device != "cuda" or torch.cuda.is_available()) else "cpu"
+
+    # --- data (hidden-truth generator) ------------------------------------------------------
+    gen_cfg = GenConfig(**OmegaConf.to_container(cfg.data, resolve=True))
+    field_np, truth = generate_field(gen_cfg, seed=cfg.seed)
+    field = torch.from_numpy(field_np).to(device)          # [T,V,H,W]
+    T, V, H, W = field.shape
+    fams = [m["family"] for m in truth["modes"]]
+
+    # --- model / optim ----------------------------------------------------------------------
+    K = int(cfg.model.K)
+    truth_amp = np.stack([m["amp"] for m in truth["modes"]])     # [n_modes,T] hidden answer key
+    truth_phi = np.stack([m["phi"] for m in truth["modes"]])     # [n_modes,H,W]
+    truth_scale = np.array([m["scale"] for m in truth["modes"]])
+    enc = SelectionEncoder(K=K, V=V, H=H, W=W, temp=cfg.model.temp0, norm=cfg.model.norm,
+                           init=cfg.model.init, init_std=cfg.model.init_std,
+                           sigma_min=cfg.model.sigma_min, sigma_max=cfg.model.sigma_max,
+                           signed=bool(cfg.model.signed),
+                           generator=torch.Generator().manual_seed(cfg.seed)).to(device)
+    opt = torch.optim.Adam(enc.parameters(), lr=cfg.train.lr)
+    eye = torch.eye(K, device=device)
+    B = int(cfg.train.batch)
+    steps = int(cfg.train.max_steps)
+    g = torch.Generator(device="cpu").manual_seed(cfg.seed)  # index sampling RNG
+
+    with torch.no_grad():                                  # untrained reference (D-013 baseline)
+        masks_init = enc.masks().cpu().numpy()
+        # reference energy density: the mean per-cell temporal variance of the field. A channel
+        # whose var/count^2 falls below this is reading quieter-than-average cells (D-019).
+        e_ref = field.var(dim=0).mean().clamp_min(1e-12)
+        cell_mean = field.reshape(T, -1).mean(dim=0, keepdim=True)          # [1,N] for L_recon
+        x_ref = ((field.reshape(T, -1) - cell_mean) ** 2).mean()            # field energy scale
+        # geometric footprint ladder: channel 0 gets the largest target, channel K-1 the smallest
+        # (matches the multiscale init's sigma ladder, reversed so index order reads big -> small)
+        n_cells = float(V * H * W)
+        tgt_cnt = torch.logspace(np.log10(cfg.model.size_max_frac),
+                                 np.log10(cfg.model.size_min_frac), K,
+                                 device=device) * n_cells                    # [K] target cell counts
+        log_tol = float(np.log(cfg.train.size_tol))
+
+    writer = SummaryWriter(log_dir="tb")                   # under the Hydra run dir (.tmps/runs/..)
+    print(f"[train] device={device} K={K} B={B} steps={steps} "
+          f"lambda_white={cfg.train.lambda_white} | families={fams}")
+
+    for step in range(steps):
+        enc.temp = _anneal(step, steps, cfg.model.temp0, cfg.model.temp1)
+
+        idx = torch.randint(0, T - 1, (B,), generator=g)   # consecutive-pair starts
+        xb = field[idx]                                    # [B,V,H,W]
+        xb1 = field[idx + 1]                               # [B,V,H,W]
+        s_t = enc(xb)                                       # [B,K]
+        s_tp1 = enc(xb1)                                    # [B,K]
+
+        # batch covariance of centered s_t (raw) -- used by all modes
+        mu = s_t.mean(dim=0, keepdim=True)                 # [1,K]
+        sc = s_t - mu                                      # [B,K]
+        cov = (sc.T @ sc) / (B - 1)                        # [K,K]
+        cond = 1.0
+
+        # DIFFERENTIABLE per-channel normalization. The scale factors must NOT be detached: a
+        # detached std is a constant to autograd, so scaling every mask down shrinks the loss --
+        # exactly how the first `corr` attempt drove var 1e6 -> 1e-40 (D-017).
+        v = torch.diagonal(cov).clamp_min(1e-8)            # [K] channel variance (differentiable)
+        inv = v.rsqrt()                                    # [K]
+        corr = cov * inv[:, None] * inv[None, :]           # [K,K] unit diagonal, scale-invariant
+        off = corr - torch.diag(torch.diagonal(corr))
+        l_white = (off ** 2).sum() / (K * (K - 1))         # mean squared off-diagonal correlation
+
+        if cfg.train.whitening == "corr":
+            # Slowness as a RAYLEIGH QUOTIENT var(ds_i)/var(s_i) plus a decorrelation penalty on
+            # the correlation matrix -- i.e. SFA's objective and constraint, both written so they
+            # are invariant to mask scale in VALUE AND GRADIENT. Nothing can be won by shrinking
+            # or by duplicating a channel, so the K channels must spread out (D-013/D-017).
+            d = s_tp1 - s_t
+            gap = (d - d.mean(dim=0, keepdim=True)) * inv  # scale-free per-channel gap
+            l_slow = (gap ** 2).mean(dim=0).mean()         # = mean_i var(ds_i)/var(s_i)
+            loss = cfg.train.lambda_slow * l_slow + cfg.train.lambda_white * l_white
+        elif cfg.train.whitening == "hard":
+            # ABLATION (fails -- kept for the record, D-017): detached ZCA of the correlation
+            # matrix. Scale-free, but because `inv_sqrt` carries no gradient, redundancy is free:
+            # duplicate channels leave near-zero eigenvalues that the eps floor never re-inflates,
+            # so the whitened gap goes to ~0 with every channel carrying the SAME signal.
+            with torch.no_grad():
+                evals, evecs = torch.linalg.eigh(corr)     # corr = U diag(evals) U^T
+                inv_sqrt = evecs @ torch.diag(
+                    evals.clamp_min(cfg.train.white_eps).rsqrt()) @ evecs.T   # R^{-1/2} [K,K]
+                cond = float(evals.max() / evals.clamp_min(cfg.train.white_eps).min())
+            gap = ((s_tp1 - mu.detach()) - sc) * inv @ inv_sqrt   # whitened signal gap
+            l_slow = (gap ** 2).sum(dim=1).mean()
+            loss = l_slow
+        else:                                              # "soft" ABLATION (collapses, D-015)
+            gap = s_tp1 - s_t                              # slowness on RAW s (not scale-free)
+            l_slow = (gap ** 2).sum(dim=1).mean()
+            loss = l_slow + cfg.train.lambda_white * ((cov - eye) ** 2).sum()
+
+        # anti-death hinge: nothing above forbids a mask going to literally 0 (a dead channel has
+        # no signal to be slow or correlated). Require each channel's count-normalized signal to
+        # keep unit std -- a VICReg-style one-sided hinge, inactive for any live channel.
+        sd_n = (sc / enc.soft_count().clamp_min(1e-6).sqrt()).std(dim=0)      # [K]
+        l_var = (torch.relu(1.0 - sd_n) ** 2).mean()
+        loss = loss + cfg.train.lambda_var * l_var
+
+        # --- energy floor (D-019): keep each kernel ON SIGNAL -----------------------------------
+        # e_i = var(s_i)/count_i^2 is the mean pairwise covariance of the selected cells: free of
+        # mask SIZE, so it cannot be gamed by growing or shrinking the footprint. Without this the
+        # scale-free L_slow walks every kernel into the dead corners of the domain (finding F-6).
+        cnt = enc.soft_count().clamp_min(1e-6)                                # [K]
+        e_ch = torch.diagonal(cov) / cnt ** 2                                 # [K] energy density
+        l_energy = (torch.relu(1.0 - e_ch / e_ref) ** 2).mean()
+        if cfg.train.lambda_energy:
+            loss = loss + cfg.train.lambda_energy * l_energy
+
+        # --- scale ladder (D-020): keep a DIVERSITY OF MASK TYPES ------------------------------
+        # Left free, every mask shrinks to a tiny patch (init ~4095 cells -> median ~28), because
+        # decorrelation prefers disjoint footprints AND e_i = var/count^2 is maximized by a tiny
+        # coherent patch. So the "multi-scale sensor" picture (D-013) decays into 16 small patches.
+        # Assign channel i a target footprint on a geometric ladder (small energetic patch ->
+        # basin-scale) and penalize only OUTSIDE a tolerance factor, so it guides without pinning.
+        l_size = (torch.relu((cnt / tgt_cnt).log().abs() - log_tol) ** 2).mean()
+        if cfg.train.lambda_size:
+            loss = loss + cfg.train.lambda_size * l_size
+
+        # --- coverage / reconstruction (D-019): do the K channels SPAN the field? ---------------
+        # Best linear decode of this batch's field from [1, s], solved in closed form and left
+        # differentiable, so l_recon is exactly the unexplained variance fraction (1 - R^2). Also
+        # penalizes redundancy: a duplicate channel buys no reduction, so its gradient points at
+        # whatever residual is still unexplained.
+        if cfg.train.lambda_recon:
+            X = xb.reshape(B, -1) - cell_mean                                 # [B,N]
+            # decode from STANDARDIZED channels: with raw s (variance ~1e6) the normal-equation
+            # matrix has entries ~1e9, `recon_ridge` is negligible against it, and with channels
+            # still correlated at ~0.99 the solve is near-singular -> garbage gradients that swamp
+            # every other term at any lambda. Standardizing puts G on a unit scale (D-019).
+            S1 = torch.cat([torch.ones(B, 1, device=device), sc * inv], dim=1)  # [B,K+1]
+            G = S1.T @ S1 + cfg.train.recon_ridge * B * torch.eye(K + 1, device=device)
+            Wd = torch.linalg.solve(G, S1.T @ X)                              # [K+1,N]
+            l_recon = ((X - S1 @ Wd) ** 2).mean() / x_ref
+            loss = loss + cfg.train.lambda_recon * l_recon
+        else:
+            l_recon = torch.zeros((), device=device)
+        opt.zero_grad(set_to_none=True)
+        loss.backward()
+        gnorm = torch.nn.utils.clip_grad_norm_(enc.parameters(), float(cfg.train.grad_clip))
+        opt.step()
+
+        if step % int(cfg.train.log_every) == 0 or step == steps - 1:
+            with torch.no_grad():
+                var = torch.diagonal(cov)                  # per-channel RAW variance [K]
+                slow_ch = (gap ** 2).mean(dim=0)           # per-channel slowness (whitened if hard)
+            writer.add_scalar("loss/total", loss.item(), step)
+            writer.add_scalar("loss/slow", l_slow.item(), step)
+            writer.add_scalar("loss/white", l_white.item(), step)
+            writer.add_scalar("loss/var_hinge", l_var.item(), step)
+            writer.add_scalar("loss/energy", l_energy.item(), step)
+            writer.add_scalar("loss/size", l_size.item(), step)
+            writer.add_scalar("mask/count_min", cnt.min().item(), step)
+            writer.add_scalar("mask/count_max", cnt.max().item(), step)
+            writer.add_scalar("loss/recon", l_recon.item(), step)
+            writer.add_scalar("energy/density_min", (e_ch / e_ref).min().item(), step)
+            writer.add_scalar("energy/density_max", (e_ch / e_ref).max().item(), step)
+            writer.add_scalar("mask/count_mean", enc.soft_count().mean().item(), step)
+            writer.add_scalar("var/mean", var.mean().item(), step)
+            writer.add_scalar("var/min", var.min().item(), step)
+            writer.add_scalar("var/max", var.max().item(), step)
+            writer.add_scalar("slow_per_ch/min", slow_ch.min().item(), step)
+            writer.add_scalar("slow_per_ch/max", slow_ch.max().item(), step)
+            writer.add_scalar("temp", enc.temp, step)
+            writer.add_scalar("cond", cond, step)
+            writer.add_scalar("grad_norm", float(gnorm), step)
+            print(f"  step {step:5d} | L={loss.item():.4f} slow={l_slow.item():.5f} "
+                  f"offcorr2={l_white.item():.4f} energy={l_energy.item():.4f} "
+                  f"recon={l_recon.item():.4f} size={l_size.item():.3f} | "
+                  f"e/e_ref[{(e_ch/e_ref).min():.2f},{(e_ch/e_ref).max():.2f}] "
+                  f"|g|={float(gnorm):.1e} temp={enc.temp:.2f}")
+
+    # --- final artifacts (ephemeral; promotion to results/ needs user OK) --------------------
+    with torch.no_grad():
+        S = enc(field).cpu().numpy()                       # [T,K] full scalar series
+        masks = enc.masks().cpu().numpy()                  # [K,V,H,W]
+    np.savez("artifacts.npz", S=S, masks=masks, masks_init=masks_init, families=np.array(fams),
+             truth_amp=truth_amp, truth_phi=truth_phi, truth_scale=truth_scale,
+             temp_final=np.float32(enc.temp))
+    metrics = dict(final_loss=float(loss.item()), final_slow=float(l_slow.item()),
+                   final_energy=float(l_energy.item()), final_recon=float(l_recon.item()),
+                   final_size=float(l_size.item()),
+                   mask_count_min=float(cnt.min().item()), mask_count_max=float(cnt.max().item()),
+                   final_white=float(l_white.item()), var_mean=float(var.mean().item()),
+                   var_min=float(var.min().item()), var_max=float(var.max().item()),
+                   slow_ch_min=float(slow_ch.min().item()), slow_ch_max=float(slow_ch.max().item()))
+    with open("metrics.json", "w") as f:
+        json.dump(metrics, f, indent=2)
+    writer.close()
+    print(f"[train] done. run dir: {os.getcwd()}")
+    print(f"[train] metrics: {metrics}")
+
+
+if __name__ == "__main__":
+    main()
