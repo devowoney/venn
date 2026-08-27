@@ -58,3 +58,21 @@ Modes organized by SCALE (this is the D-013 heterogeneity). Default counts keep 
 3. One slowness loss `L=mean Σ_i (s[t+1]−s[t])²` → `L.backward()`; assert mask grads finite,
    grad-norm > 0 (gradients actually reach the masks).
 4. Log per-var field stats (mean/std/min/max), S stats, L, grad-norm. Success/failure line.
+
+## Visual verification (added 2026-08-27)
+
+```
+conda run -n oceanai python -m src.probes.plots_field            # newest run, with kernel overlay
+conda run -n oceanai python -m src.probes.plots_field --no-run   # field only
+```
+
+Produces, in `<run>/figs/`: `field_snapshots.png` (SSH/SST in time + mean + temporal-std maps),
+`field_modes.png` (the hidden answer key: every phi_k and a_k(t)), `kernel_activation.png` (where
+the kernels look, weighted by each one's drop-one unique contribution), and `field.gif` (the field
+evolving with kernel outlines pulsing at their instantaneous activation).
+
+**Always look at these before trusting a metric.** They exposed four generator weaknesses that the
+scalars did not (findings F-8): SSH and SST are 0.98-correlated (V=2 nearly redundant), every
+phi_k is strictly positive (which caps channel decorrelation, F-4), a ~25% border ring of the
+domain has near-zero variance (the dead zone the kernels fled into, F-6), and the chaotic modes
+are spatially tiny and temporally intermittent.
