@@ -1,0 +1,49 @@
+name: oceanai
+channels:
+  - conda-forge
+  - pytorch
+  - nvidia
+
+dependencies:
+  - python=3.12
+
+  # Core scientific stack
+  - numpy
+  - scipy
+  - pandas
+  - xarray>=2025.1   # >=2025 needed for zarr v3 I/O; 2024.x uses removed zarr .compressor API
+  - netcdf4
+  - h5netcdf
+  - zarr
+  - dask
+  - dask-image
+  - numba
+  - xesmf
+
+  # cuda
+  - cuda=12.8.1
+  - cuda-toolkit=12.8.1
+  - cuda-nvcc
+  - cudnn
+
+  # Visualization
+  - matplotlib
+  - seaborn
+  - plotly
+  - tensorboard
+
+  # Testing
+  - pytest
+
+  # Workflow & reproducibility
+  - pip
+  - pip:
+      - hydra-core
+      - omegaconf
+      - tqdm
+      - einops
+      - lightning
+      - torch
+      - torchvision
+      - timm
+      - --extra-index-url https://download.pytorch.org/whl/cu126
