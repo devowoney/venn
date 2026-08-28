@@ -35,6 +35,19 @@ class GenConfig:
     sst_chaotic_w: float = 0.5    # SST (private-ish) weight on small chaotic modes
     sst_blur_sigma: float = 2.0   # spatial smoothing of shared patterns for SST
     obs_noise: float = 0.05       # additive obs noise, in units of (standardized) field std
+    # --- rev2 (D-021). Every default below REPRODUCES THE OLD FIELD; the new values live in
+    # config/config.yaml, so runs recorded before 2026-08-27 regenerate exactly as they were.
+    signed_patterns: bool = False   # dipole + low-wavenumber wave phi_k, and a zero-mean band,
+                                    # so cell-pair covariance can be NEGATIVE (fixes F-4)
+    periodic_x: bool = False        # wrap the x axis (longitude) when building patterns
+    place_full_domain: bool = False # draw mode centres over the whole grid, not inside a margin
+    wave_kmax: int = 3              # largest wavenumber for the wave patterns
+    wave_env_sigma: float = 0.0     # >0: window each wave into a regional packet of this width.
+                                    # 0 = domain-filling wave, which swamps the field's variance
+    sst_tau: float = 0.0            # >0: SST is an AR1 low-pass response to the SSH forcing with
+                                    # this time constant, replacing the fixed `sst_lag` shift
+    n_private_ssh: int = 0          # modes visible ONLY in SSH (taken from the cyclic+chaotic set)
+    n_private_sst: int = 0          # modes visible ONLY in SST
 
 
 # ----------------------------------------------------------------------------- spatial patterns
@@ -43,18 +56,65 @@ def _grid(H: int, W: int):
     return yy.astype(np.float64), xx.astype(np.float64)
 
 
-def _gauss_bump(H: int, W: int, cy: float, cx: float, sy: float, sx: float) -> np.ndarray:
-    """Anisotropic Gaussian bump, normalized to max=1. Shape [H,W]."""
+def _gauss_bump(H: int, W: int, cy: float, cx: float, sy: float, sx: float,
+                periodic_x: bool = False) -> np.ndarray:
+    """Anisotropic Gaussian bump, normalized to max=1. Shape [H,W].
+
+    With `periodic_x` the x distance wraps around the domain (longitude), so a bump centred near
+    the edge continues on the other side instead of leaving a dead border (D-021).
+    """
     yy, xx = _grid(H, W)
-    phi = np.exp(-(((yy - cy) ** 2) / (2 * sy ** 2) + ((xx - cx) ** 2) / (2 * sx ** 2)))
+    dx = xx - cx
+    if periodic_x:
+        dx = (dx + W / 2.0) % W - W / 2.0
+    phi = np.exp(-((yy - cy) ** 2 / (2 * sy ** 2) + dx ** 2 / (2 * sx ** 2)))
     return phi / phi.max()
 
 
-def _equatorial_band(H: int, W: int, cy: float, sy: float) -> np.ndarray:
-    """Broad horizontal stripe (large-scale, long-range in x). Shape [H,W], max=1."""
+def _equatorial_band(H: int, W: int, cy: float, sy: float,
+                     zero_mean: bool = False) -> np.ndarray:
+    """Broad horizontal stripe (large-scale, long-range in x). Shape [H,W], max|phi|=1.
+
+    `zero_mean` removes the spatial mean, giving a positive core with a negative surround — a
+    mass-conserving basin mode, and the large-scale carrier of SIGN structure (D-021).
+    """
     yy, _ = _grid(H, W)
     phi = np.exp(-((yy - cy) ** 2) / (2 * sy ** 2))
-    return phi / phi.max()
+    if zero_mean:
+        phi = phi - phi.mean()
+    return phi / np.abs(phi).max()
+
+
+def _dipole(H: int, W: int, cy: float, cx: float, sy: float, sx: float, sep: float,
+            angle: float, periodic_x: bool = False) -> np.ndarray:
+    """Two opposite-signed lobes separated by `sep` along `angle`. Shape [H,W], max|phi|=1.
+
+    The ocean analogue is a teleconnection dipole / eddy pair: the two lobes are ANTI-correlated,
+    which is what lets a non-negative selection mask decorrelate two channels (F-4 / D-021).
+    """
+    dy, dx = sep * np.sin(angle) / 2.0, sep * np.cos(angle) / 2.0
+    phi = (_gauss_bump(H, W, cy + dy, cx + dx, sy, sx, periodic_x)
+           - _gauss_bump(H, W, cy - dy, cx - dx, sy, sx, periodic_x))
+    return phi / np.abs(phi).max()
+
+
+def _wave(H: int, W: int, kx: int, ky: int, phase: float, env_sigma: float = 0.0,
+          cy: float = 0.0, cx: float = 0.0, periodic_x: bool = False) -> np.ndarray:
+    """Low-wavenumber wave, optionally windowed into a regional PACKET. [H,W], max|phi|=1.
+
+    Sign-varying, which is the point (D-021). `env_sigma > 0` multiplies it by a broad Gaussian
+    envelope centred at (cy,cx), making it a Rossby-wave-packet-like regional structure instead of
+    a domain-filling plaid. Without the envelope the wave carries |phi|=1 over all 4096 cells and
+    completely dominates the field's variance -- visible immediately in field_snapshots.png.
+    """
+    yy, xx = _grid(H, W)
+    dx = xx - cx
+    if periodic_x:
+        dx = (dx + W / 2.0) % W - W / 2.0
+    phi = np.cos(2 * np.pi * (kx * dx / W + ky * (yy - cy) / H) + phase)
+    if env_sigma > 0:
+        phi = phi * _gauss_bump(H, W, cy, cx, env_sigma, env_sigma, periodic_x)
+    return phi / np.abs(phi).max()
 
 
 def _gaussian_blur(img: np.ndarray, sigma: float) -> np.ndarray:
@@ -89,6 +149,21 @@ def _sinusoid_series(rng: np.random.Generator, T: int, period: float) -> np.ndar
     t = np.arange(T)
     a = np.sin(2 * np.pi * t / period + rng.uniform(0, 2 * np.pi)) + 0.05 * rng.standard_normal(T)
     return _standardize(a)
+
+
+def _ar1_response(a: np.ndarray, tau: float) -> np.ndarray:
+    """First-order low-pass response to forcing `a`, time constant `tau`. Standardized [T].
+
+    `y[t] = rho*y[t-1] + (1-rho)*a[t]`, `rho = exp(-1/tau)`. This is the physical SST story (SST
+    integrates surface flux), and unlike a fixed index shift it damps amplitude AND shifts phase,
+    which is what actually decorrelates SST from SSH (D-021).
+    """
+    rho = float(np.exp(-1.0 / max(tau, 1e-6)))
+    y = np.zeros_like(a)
+    y[0] = a[0]
+    for t in range(1, len(a)):
+        y[t] = rho * y[t - 1] + (1.0 - rho) * a[t]
+    return _standardize(y)
 
 
 def _lorenz_series(rng: np.random.Generator, T: int, dt: float, subsample: int) -> np.ndarray:
@@ -127,48 +202,79 @@ def generate_field(cfg: GenConfig = GenConfig(), seed: int = 0):
 
     modes: List[dict] = []  # each: {scale, family, phi[H,W], amp[T]}
 
+    px = cfg.periodic_x
+    # placement margins: rev2 draws centres over the FULL domain so no border ring is left dead
+    my, mx = (0.0, 0.0) if cfg.place_full_domain else (12.0, 12.0)
+    my_s, mx_s = (0.0, 0.0) if cfg.place_full_domain else (6.0, 6.0)
+
     # --- stationary (LARGE): equatorial band, slow OU ---------------------------------------
     for _ in range(cfg.n_stationary):
-        phi = _equatorial_band(H, W, cy=H / 2 + rng.uniform(-4, 4), sy=rng.uniform(9, 13))
+        phi = _equatorial_band(H, W, cy=H / 2 + rng.uniform(-4, 4), sy=rng.uniform(9, 13),
+                               zero_mean=cfg.signed_patterns)
         amp = _ou_series(rng, T, cfg.ou_tau)
         modes.append(dict(scale="large", family="stationary", phi=phi, amp=amp))
 
-    # --- cyclic (MEDIUM): regional blobs, sinusoids ------------------------------------------
+    # --- cyclic (MEDIUM): sign-varying dipoles / basin waves (rev2), or blobs (legacy) --------
     for i in range(cfg.n_cyclic):
-        cy, cx = rng.uniform(12, H - 12), rng.uniform(12, W - 12)
-        phi = _gauss_bump(H, W, cy, cx, sy=rng.uniform(8, 12), sx=rng.uniform(8, 12))
+        cy, cx = rng.uniform(my, H - my), rng.uniform(mx, W - mx)
+        sy, sx = rng.uniform(8, 12), rng.uniform(8, 12)
+        if not cfg.signed_patterns:
+            phi = _gauss_bump(H, W, cy, cx, sy, sx, px)
+        elif i % 2 == 0:                                   # dipole: two anti-correlated lobes
+            phi = _dipole(H, W, cy, cx, sy * 0.7, sx * 0.7,
+                          sep=rng.uniform(18, 28), angle=rng.uniform(0, np.pi), periodic_x=px)
+        else:                                              # regional wave packet
+            phi = _wave(H, W, kx=int(rng.integers(1, cfg.wave_kmax + 1)),
+                        ky=int(rng.integers(0, cfg.wave_kmax + 1)),
+                        phase=rng.uniform(0, 2 * np.pi), env_sigma=cfg.wave_env_sigma,
+                        cy=cy, cx=cx, periodic_x=px)
         period = cfg.cyclic_periods[i % len(cfg.cyclic_periods)]
         amp = _sinusoid_series(rng, T, period)
         modes.append(dict(scale="medium", family="cyclic", phi=phi, amp=amp))
 
     # --- chaotic (SMALL): tight energetic patches, Lorenz coords ------------------------------
+    # Kept as MONOPOLES on purpose: a small eddy is physically a monopole; the sign structure
+    # belongs to the large/medium scales.
     n_lorenz = int(np.ceil(cfg.n_chaotic / 3))
     chaotic_amps = np.concatenate(
         [_lorenz_series(rng, T, cfg.lorenz_dt, cfg.lorenz_subsample) for _ in range(n_lorenz)]
     )  # [3*n_lorenz, T]
     for i in range(cfg.n_chaotic):
-        cy, cx = rng.uniform(6, H - 6), rng.uniform(6, W - 6)
-        phi = _gauss_bump(H, W, cy, cx, sy=rng.uniform(2, 4), sx=rng.uniform(2, 4))
+        cy, cx = rng.uniform(my_s, H - my_s), rng.uniform(mx_s, W - mx_s)
+        phi = _gauss_bump(H, W, cy, cx, sy=rng.uniform(2, 4), sx=rng.uniform(2, 4), periodic_x=px)
         modes.append(dict(scale="small", family="chaotic", phi=phi, amp=chaotic_amps[i]))
 
     K = len(modes)
 
-    # --- per-var weights & lags (SST shares large+medium lagged; small mostly private) --------
-    A = np.zeros((2, T, K))       # amplitudes per var, lagged  [V,T,K]
+    # --- private modes (rev2): a few modes appear in ONE variable only, so SSH and SST no longer
+    # see the same 10 signals. Drawn from the cyclic+chaotic set, never the single large mode.
+    only = ["both"] * K
+    if cfg.n_private_ssh or cfg.n_private_sst:
+        pool = rng.permutation(np.arange(cfg.n_stationary, K))
+        n0, n1 = int(cfg.n_private_ssh), int(cfg.n_private_sst)
+        for j in pool[:n0]:
+            only[j] = "ssh"
+        for j in pool[n0:n0 + n1]:
+            only[j] = "sst"
+
+    # --- per-var weights & response (SST = AR1 low-pass of the SSH forcing in rev2) -----------
+    A = np.zeros((2, T, K))       # amplitudes per var  [V,T,K]
     Phi = np.zeros((2, K, H, W))  # spatial patterns per var    [V,K,H,W]
     for k, m in enumerate(modes):
         shared = m["family"] in ("stationary", "cyclic")
         # var0 = SSH: full weight, no lag, sharp pattern
-        A[0, :, k] = m["amp"]
+        A[0, :, k] = m["amp"] if only[k] != "sst" else 0.0
         Phi[0, k] = m["phi"]
-        # var1 = SST: lagged + smoothed on shared modes, private-weight on chaotic
-        if shared:
-            w, lag = cfg.sst_shared_w, cfg.sst_lag
-        else:
-            w, lag = cfg.sst_chaotic_w, 0
-        idx = np.clip(np.arange(T) - lag, 0, T - 1)  # hold initial value for t < lag
-        A[1, :, k] = w * m["amp"][idx]
+        # var1 = SST: damped + phase-shifted response on shared modes
+        w = cfg.sst_shared_w if shared else cfg.sst_chaotic_w
+        if cfg.sst_tau > 0:                                # rev2: first-order response
+            a1 = _ar1_response(m["amp"], cfg.sst_tau)
+        else:                                              # legacy: fixed index shift
+            lag = cfg.sst_lag if shared else 0
+            a1 = m["amp"][np.clip(np.arange(T) - lag, 0, T - 1)]
+        A[1, :, k] = (w * a1) if only[k] != "ssh" else 0.0
         Phi[1, k] = _gaussian_blur(m["phi"], cfg.sst_blur_sigma) if shared else m["phi"]
+        m["only"] = only[k]                                # record in the hidden answer key
 
     # --- superpose, add obs noise, standardize per var ---------------------------------------
     field = np.empty((T, 2, H, W), dtype=np.float64)
@@ -183,7 +289,7 @@ def generate_field(cfg: GenConfig = GenConfig(), seed: int = 0):
     assert np.isfinite(field).all(), "non-finite values in field"
 
     truth = dict(
-        modes=[dict(scale=m["scale"], family=m["family"],
+        modes=[dict(scale=m["scale"], family=m["family"], only=m.get("only", "both"),
                     phi=m["phi"].astype(np.float32), amp=m["amp"].astype(np.float32))
                for m in modes],
         K_modes=K, seed=seed, config=cfg.__dict__.copy(),

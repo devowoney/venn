@@ -253,7 +253,11 @@ def main() -> None:
         masks, S = art["masks"], art["S"]
         figs = os.path.join(run, "figs")
     else:
-        gen_cfg, seed, masks, S = GenConfig(), 0, None, None
+        # read the LIVE config, not GenConfig()'s defaults -- those are deliberately the legacy
+        # pre-D-021 field, so falling back to them would show the wrong testbed entirely.
+        cfg = OmegaConf.load(os.path.join(repo, "config/config.yaml"))
+        gen_cfg = GenConfig(**OmegaConf.to_container(cfg.data, resolve=True))
+        seed, masks, S = int(cfg.seed), None, None
         figs = os.path.join(repo, ".tmps/figs_field")
     os.makedirs(figs, exist_ok=True)
 

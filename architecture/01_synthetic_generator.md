@@ -24,17 +24,38 @@ Reproducible from `(seed, GenConfig)` alone. Smoke test writes to `./.tmps/` as 
 Modes organized by SCALE (this is the D-013 heterogeneity). Default counts keep the recorded
 1/3/6 family mix (D-009), now mapped onto a scale ladder:
 
-| family | count | scale | spatial φ_k | temporal a_k(t) |
+| family | count | scale | spatial φ_k (rev2, D-021) | temporal a_k(t) |
 |---|---|---|---|---|
-| stationary | 1 | LARGE | elongated equatorial band (broad Gaussian stripe) | Ornstein–Uhlenbeck, long τ (slow drift) |
-| cyclic | 3 | MEDIUM | Gaussian blobs σ≈8–12 at fixed centers | sinusoids, periods P≈[60,140,300] + small noise |
-| chaotic | 6 | SMALL | tight Gaussian patches σ≈2–4 at "energetic" sites | 2× Lorenz (σ=10,ρ=28,β=8/3) → x,y,z = 6 series |
+| stationary | 1 | LARGE | equatorial band, **zero-mean** → positive core, negative surround | Ornstein–Uhlenbeck, long τ (slow drift) |
+| cyclic | 3 | MEDIUM | **dipole** (`bump(c1) − bump(c2)`) and low-wavenumber **wave** (`cos(2π(kx·x/W + ky·y/H) + φ)`), alternating | sinusoids, periods P≈[60,140,300] + small noise |
+| chaotic | 6 | SMALL | tight Gaussian monopoles σ≈2–4 (eddies), centres over the FULL domain, periodic in x | 2× Lorenz (σ=10,ρ=28,β=8/3) → x,y,z = 6 series |
 
 - **φ_k** normalized to max |φ|=1. **a_k** standardized to unit variance (guards Lorenz scale).
-- **SSH/SST coupling:** SST (var1) shares the LARGE+MEDIUM modes with SSH (var0) but **lagged by
-  τ** (`lag_{1,k}>0`) and with a spatially smoothed φ; each var also keeps some private weight on
-  SMALL modes. Encoded per-mode via `w_{v,k}` and `lag_{v,k}`.
+- **SSH/SST coupling (rev2, D-021):** SST is a **first-order (AR1) response** to the SSH forcing,
+  `sst_k(t) = ρ·sst_k(t−1) + (1−ρ)·a_k(t)`, `ρ = exp(−1/sst_tau)` — a physical low-pass (SST
+  integrates flux), which damps amplitude AND shifts phase. For `sst_tau=20` against period 60 the
+  phase lag is ~64°, so `corr(SSH,SST) → ~0.45` instead of the 0.98 the old fixed 3-step lag gave.
+  Additionally `n_private_ssh` / `n_private_sst` modes appear in ONE variable only (previously all
+  10 modes appeared in both). Encoded per-mode via `w_{v,k}`.
 - **noise_v:** small additive Gaussian (obs noise), std = `obs_noise` × field std.
+
+## Three defects this SOP's rev2 fixes (findings F-8 → D-021)
+
+Diagnosed by LOOKING at the field (`src/probes/plots_field.py`), not from metrics:
+
+1. **Dead borders.** Centres were drawn from `uniform(12,H−12)` / `(6,H−6)` and every pattern was a
+   LOCAL bump, so a ~25% border ring had near-zero temporal variance — and that is exactly where
+   the encoder's kernels fled (F-6). Fix: centres over the FULL domain, **periodic in x**
+   (longitude wraps), plus basin-scale wave patterns that have support everywhere.
+2. **SSH ≈ SST** (cell corr 0.86, domain-mean 0.981) — the second variable was nearly redundant.
+   Fix: AR1 response + private modes, above.
+3. **All-positive φ_k** → 100% of cell pairs positively correlated → channel decorrelation is
+   ARITHMETICALLY impossible for a non-negative mask (F-4). Fix: dipoles, waves, zero-mean band.
+   Small eddies stay monopoles (physically right); the large/medium scales carry the sign structure.
+
+**Back-compatibility:** every rev2 knob defaults to the OLD behaviour in `GenConfig`, and the new
+values live in `config/config.yaml`. Runs recorded before 2026-08-27 therefore regenerate their
+exact original field from their own saved config (`src/probes/evaluate.py` depends on this).
 
 ## Determinism & config
 

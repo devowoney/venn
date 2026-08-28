@@ -23,6 +23,19 @@ data:
   sst_chaotic_w: 0.5
   sst_blur_sigma: 2.0
   obs_noise: 0.05
+  # --- generator rev2 (D-021): fixes the three defects the field figures exposed (F-8).
+  # GenConfig's own defaults keep the OLD behaviour, so pre-2026-08-27 runs still reproduce.
+  signed_patterns: true   # dipoles + basin waves + zero-mean band -> cell covariance can be < 0,
+                          # which is what makes channel decorrelation reachable at all (F-4)
+  periodic_x: true        # longitude wraps, so no dead border from edge-clipped bumps
+  place_full_domain: true # mode centres over the whole grid (was a 12-cell margin -> dead ring)
+  wave_kmax: 2            # largest wavenumber of the wave patterns
+  wave_env_sigma: 15.0    # window waves into regional packets; an un-enveloped wave
+                          # covers all 4096 cells at |phi|=1 and swamps everything else
+  sst_tau: 20.0           # SST = AR1 low-pass response to SSH forcing (was a 3-step shift, which
+                          # left corr(SSH,SST) = 0.98); ~64 deg phase lag at period 60
+  n_private_ssh: 2        # modes visible only in SSH
+  n_private_sst: 2        # modes visible only in SST
 
 # --- selection-mask encoder (D-015) --------------------------------------------------------
 model:
