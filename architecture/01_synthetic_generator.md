@@ -26,11 +26,12 @@ Modes organized by SCALE (this is the D-013 heterogeneity). Default counts keep 
 
 | family | count | scale | spatial φ_k (rev2, D-021) | temporal a_k(t) |
 |---|---|---|---|---|
-| stationary | 1 | LARGE | equatorial band, **zero-mean** → positive core, negative surround | Ornstein–Uhlenbeck, long τ (slow drift) |
+| stationary | 1 | LARGE | equatorial band, **zero-mean** → positive core, negative surround | **CONSTANT** `amp = stationary_amp`, un-standardized (rev3, D-025). Legacy: Ornstein–Uhlenbeck, long τ — a slow DRIFT, which is now classed `cyclic` |
 | cyclic | 3 | MEDIUM | **dipole** (`bump(c1) − bump(c2)`) and low-wavenumber **wave** (`cos(2π(kx·x/W + ky·y/H) + φ)`), alternating | sinusoids, periods P≈[60,140,300] + small noise |
 | chaotic | 6 | SMALL | tight Gaussian monopoles σ≈2–4 (eddies), centres over the FULL domain, periodic in x | 2× Lorenz (σ=10,ρ=28,β=8/3) → x,y,z = 6 series |
 
-- **φ_k** normalized to max |φ|=1. **a_k** standardized to unit variance (guards Lorenz scale).
+- **φ_k** normalized to max |φ|=1. **a_k** standardized to unit variance (guards Lorenz scale) —
+  EXCEPT the constant stationary mode, whose whole point is that it is not standardized (rev3).
 - **SSH/SST coupling (rev2, D-021):** SST is a **first-order (AR1) response** to the SSH forcing,
   `sst_k(t) = ρ·sst_k(t−1) + (1−ρ)·a_k(t)`, `ρ = exp(−1/sst_tau)` — a physical low-pass (SST
   integrates flux), which damps amplitude AND shifts phase. For `sst_tau=20` against period 60 the
@@ -56,6 +57,38 @@ Diagnosed by LOOKING at the field (`src/probes/plots_field.py`), not from metric
 **Back-compatibility:** every rev2 knob defaults to the OLD behaviour in `GenConfig`, and the new
 values live in `config/config.yaml`. Runs recorded before 2026-08-27 therefore regenerate their
 exact original field from their own saved config (`src/probes/evaluate.py` depends on this).
+
+## rev3: the stationary mode is CONSTANT (D-025, user ruling 2026-09-01)
+
+**The defect.** `_ou_series` ends with `_standardize`, so mode 0 -- the "stationary" one -- was
+emitted at UNIT VARIANCE: exactly as much temporal energy as the three sinusoids and the six Lorenz
+channels. It was a slow wanderer (tau=200), not a stationary signal, and the testbed therefore
+contained NO flat mode for the encoder to find. Every "the encoder cannot capture the stationary
+mode" conclusion drawn before 2026-09-01 was measured against a mode that was not stationary.
+
+**The fix** (`stationary_constant: true`, GenConfig default False so older runs still reproduce):
+
+```
+amp_0[t] = stationary_amp        # flat, NOT standardized -> var = 0
+field    += amp_0 * phi_0        # a static spatial offset, unchanging in t
+```
+
+Two details that matter:
+
+- **SST must bypass the AR1 response.** A constant's AR1 steady state IS that constant, so routing
+  it through `_ar1_response` would add a startup transient -- and that function's closing
+  `_standardize` divides a zero-variance series by ~0, which would delete the mode from SST
+  entirely. The generator now detects `std(amp) < 1e-12` and passes the constant through.
+- **The constant survives field standardization.** `fv = (fv - fv.mean()) / fv.std()` removes a
+  GLOBAL SCALAR mean, not a per-cell one, so a spatially structured static pattern is preserved.
+  Verified: the field's time-mean map correlates **1.000** with `phi_0`, at rms 0.818 against a
+  field std of 1.0.
+
+**Consequence downstream.** A constant mode has zero variance, so anything that standardizes a
+series or correlates against one degenerates on it: `mode_r2` now returns `None` for it (a
+regression with an intercept "explains" any constant perfectly) and the probe judges it with
+`stationary_capture` / `amp_ratio` instead. The family labeller tests flatness FIRST, on the raw
+amplitude. See D-025 and SOP 02.
 
 ## Determinism & config
 

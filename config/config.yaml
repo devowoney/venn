@@ -36,6 +36,13 @@ data:
                           # left corr(SSH,SST) = 0.98); ~64 deg phase lag at period 60
   n_private_ssh: 2        # modes visible only in SSH
   n_private_sst: 2        # modes visible only in SST
+  # --- generator rev3 (D-025, user 2026-09-01): STATIONARY MEANS CONSTANT.
+  # The old mode 0 was an OU drift, and `_ou_series` standardizes, so it carried UNIT VARIANCE --
+  # as much temporal energy as the sinusoids. It was never a stationary signal. Now mode 0 is a
+  # static pattern with a flat amplitude, living in the field's TIME MEAN (measured: the field's
+  # time-mean map correlates 1.000 with the mode-0 pattern, rms 0.818 vs field std 1.0).
+  stationary_constant: true
+  stationary_amp: 1.0     # the constant level, in units of the other modes' unit std
 
 # --- selection-mask encoder (D-015) --------------------------------------------------------
 model:
@@ -78,6 +85,76 @@ train:
                         # 0 disables -> every mask shrinks to a tiny patch (median 28 cells).
   size_tol: 2.0         # free within this factor of the target; penalized only outside it
   recon_ridge: 1.0e-3   # ridge on the K+1 normal equations (relative to B; channels standardized)
+
+  # --- D-024 spectral band ladder: assign each channel a TIMESCALE ------------------------------
+  # Why this exists: mean slowness is ONE objective for all K channels, so raising K just adds
+  # near-duplicates of the dominant (slow) regime -- measured populations 3/0/1 (K=4) ... 36/10/18
+  # (K=64), slow-dominated at every K. This is the temporal analogue of the D-020 size ladder.
+  spectral:
+    enable: true
+    win_len: 512        # window length for the periodogram. Must resolve the slowest band:
+                        # >= ~2x slow_period_min, and << T so window starts still randomize.
+    n_win: 4            # windows averaged per step (periodogram variance is high with just one)
+    pop_target: [1, 3, 6]   # rung proportions = the CLAUDE.md target population, scaled to K.
+                            # K=16 -> 2 slow / 5 cyclic / 9 fast.
+    slow_period_min: 128.0  # slow rungs: put power at periods >= this
+    fast_period_max: 24.0   # fast rungs: put power at periods <= this
+    cyclic_period_max: 320.0  # cyclic rungs tile [fast_period_max, this] -- INTENTIONALLY
+                        # overlapping the slow band: the testbed's cycles are 60/140/300 while the
+                        # OU is tau=200, so a partition at 128 would put periods 140 and 300 out of
+                        # reach of every cyclic rung. line_cap/line_target do the separating.
+    band_target: 0.5    # hinge: >= this fraction of channel power inside its assigned band
+    line_target: 0.85   # cyclic rungs: >= this fraction within +-2 bins of the peak (truth
+                        # cyclic modes measure 0.94; the stationary one 0.67)
+    line_cap: 0.75      # slow AND fast rungs: <= this, i.e. a hump, not a line. Sits in the
+                        # 0.67 / 0.94 gap measured on the hidden truth (src/probes/family.py).
+    # GRADIENT-matched to lambda_white at init, not value-matched (D-019 convention). Measured at
+    # init, K=16, seed 0: |g_white|=3.9e-3, |g_band|=7.8e-4, |g_line|=1.0e-3 -> 5.0 and 3.9.
+    lambda_band: 5.0
+    lambda_line: 4.0
+    # --- D-027: which SHAPE term decides cyclic vs chaotic ---------------------------------------
+    # structure = hinge on the labeller's OWN quantity, `trend + osc` over total, cut at 0.5 (D-026).
+    #             DEFAULT. line = the D-024 original (+-2 bins around the peak, on 512-windows);
+    #             kept as an ablation. Measured on run 20260901_080506, `line_cap` was SILENT on all
+    #             nine fast rungs while six of them sat within 0.15 of the readout's boundary -- the
+    #             objective and the readout were not asking the same question.
+    shape_objective: structure
+    struct_target: 0.85   # cyclic rungs: structure share >= this. The hidden cyclic modes measure
+                          # 0.94, so this is just under what the physics itself achieves.
+    struct_cap: 0.30      # fast rungs: structure share <= this. The hidden CHAOTIC modes measure
+                          # 0.17-0.35 (median 0.21), so a fast rung is asked for no more oscillatory
+                          # character than the truth has. Both bars leave a MARGIN either side of
+                          # the 0.5 cut, so a satisfied channel is unambiguous, not a coin flip.
+    lambda_struct: 3.5    # GRADIENT-matched to lambda_white at init (D-019): measured K=16 seed 0,
+                          # |g_white|=5.1e-3, |g_struct|=1.5e-3 -> 3.47 (.tmps/grad_match.py).
+    # --- what the SLOW rungs are asked for (D-025) ---
+    slow_objective: level   # level  = be CONSTANT (the user's definition of stationary): drives the
+                            #          rung with L_level and EXEMPTS it from l_var / l_energy /
+                            #          L_band / L_line, all of which presume a channel fluctuates.
+                            # memory = be a slow DRIFT (my earlier misreading). Kept as an ablation.
+    flat_target: 0.95   # hinge: level/(level+fluct) >= this on the slow rungs. Must be consistent
+                        # with the labeller, or the hinge goes quiet before the channel qualifies:
+                        # r = 1/(1+amp_ratio), and family.py calls a series flat at amp_ratio < 0.05
+                        # -> r > 0.952. A target of 0.8 would have stopped at amp_ratio 0.25, i.e.
+                        # a channel that still visibly moves. 0.95 lands exactly on the cut.
+    slow_size_frac: 0.0   # footprint target for the FLAT rungs, overriding their place on the D-020
+                        # size ladder. 0 = keep the ladder value (DEFAULT).
+                        # TESTED AND REJECTED at 0.08 (run 20260901_080655 vs 20260901_080506): the
+                        # footprint did halve, 2590 -> 1318 cells, but alignment with the constant
+                        # mode's own pattern did NOT improve (|corr| 0.27 either way) and role
+                        # obedience fell 1.00 -> 0.94, with one flat channel instead of two. So the
+                        # diffuseness is not caused by the size ladder, and de-aligning the two
+                        # ladders buys nothing here. Kept as a knob because the reasoning still
+                        # applies to a testbed whose static pattern is small.
+    lambda_level: 0.13  # gradient-matched: |g_level|=4.0e-2 vs |g_white|=5.1e-3 at init. At init the
+                        # slow rungs sit at r=0.10/0.09 against a 0.95 target, so this is the
+                        # steepest term in the loss by far -- hence the small weight.
+    # long-lag memory hinge, SLOW rungs only (`slow_objective: memory`): the band alone left them
+    # (tau_e 36 vs the truth's 106, best mode a chaotic one at corr 0.50 -- run 20260831_091525).
+    mem_lag: 64         # rho at this lag. OU tau=200 -> 0.73; cycles P=300/140 -> 0.23/-0.96
+    mem_target: 0.6     # hinge: slow rungs must keep rho(mem_lag) >= this
+    lambda_mem: 0.4     # gradient-matched: |g_mem|=9.5e-3 vs |g_white|=3.9e-3 at init -> 0.41.
+                        # This is the STRONGEST-gradient term in the loss, hence the small weight.
   # lambda_energy / lambda_recon defaults are GRADIENT-MATCHED to lambda_white at init, measured
   # per-term with tmp/g.py: |g_slow|=6.7e-6, |g_white|=1.7e-4, |g_energy|=8.8e-4, |g_recon|=5.0e-4.
   # Balance the GRADIENTS, not the loss values -- the values differ by 300x and mislead.

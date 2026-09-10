@@ -85,20 +85,29 @@ def fig_masks_on_energy(masks: np.ndarray, field: np.ndarray, rows: list[dict], 
 def fig_features(S: np.ndarray, rows: list[dict], out: str) -> None:
     """The K extracted scalar channels through time -- the CLAUDE.md success readout."""
     T, K = S.shape
-    Z = (S - S.mean(0)) / (S.std(0) + 1e-12)
+    # Scale by the channel's RMS about ZERO, not by its std about its own mean. Standardizing
+    # divides out the std -- exactly the quantity that makes a STATIONARY channel stationary -- so
+    # it inflates a 2%-of-level wiggle to full amplitude and a flat channel is drawn looking just
+    # as dynamic as a cycle. (That is precisely how run 20260901_080506 first read as "ch0/ch1 are
+    # oscillating" when their fluctuation was 2-5% of their level.) With an RMS scale a constant
+    # channel draws as the flat line it is, and fluctuating channels still fill the lane. D-025.
+    Z = S / (np.sqrt((S ** 2).mean(0)) + 1e-12)
     fig, ax = plt.subplots(figsize=(13, 0.62 * K + 1.6))
     for k in range(K):
         r = rows[k]
         ax.plot(np.arange(T), Z[:, k] * 0.42 - k, lw=0.7,
                 color=FAM_COLOR.get(r["label"], "k"))
         ax.text(-T * 0.015, -k, f"ch{k}", ha="right", va="center", fontsize=8)
+        ar = r.get("amp_ratio")
+        ar_s = f"  amp_r={ar:.3f}" if ar is not None else ""
         ax.text(T * 1.004, -k,
-                f"{r['label']}  gap1={r['gap1']:.4f}  ->m{r['best_mode']}"
+                f"{r['label']}{ar_s}  gap1={r['gap1']:.4f}  ->m{r['best_mode']}"
                 f"({r['best_mode_family'][:4]}) {abs(r['best_corr']):.2f}",
                 ha="left", va="center", fontsize=7, color=FAM_COLOR.get(r["label"], "k"))
     ax.set_xlim(0, T); ax.set_ylim(-K + 0.3, 1.0)
     ax.set_yticks([]); ax.set_xlabel("time step")
-    ax.set_title("Extracted features s_i(t)  (standardized; colour = family label)")
+    ax.set_title("Extracted features s_i(t)  (scaled by RMS, so a CONSTANT channel reads flat; "
+                 "colour = family label)")
     for s in ("top", "right", "left"):
         ax.spines[s].set_visible(False)
     fig.tight_layout()

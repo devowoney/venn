@@ -48,6 +48,17 @@ class GenConfig:
                                     # this time constant, replacing the fixed `sst_lag` shift
     n_private_ssh: int = 0          # modes visible ONLY in SSH (taken from the cyclic+chaotic set)
     n_private_sst: int = 0          # modes visible ONLY in SST
+    # --- rev3 (D-025, user 2026-09-01): STATIONARY MEANS CONSTANT ------------------------------
+    # The old "stationary" mode was an OU drift with tau=200 -- and `_ou_series` ends in
+    # `_standardize`, so it carried UNIT VARIANCE, exactly as much temporal energy as the sinusoids
+    # and the Lorenz modes. It was a slow wanderer, never a stationary signal. The user's
+    # definition, from the original design discussion: stationary = a CONSTANT signal, flat in time.
+    # With this on, mode 0 is a static spatial pattern with amp[t] = stationary_amp and ZERO
+    # temporal variance; it lives entirely in the field's TIME MEAN. A zero-mean `phi` plus the
+    # field's global (scalar) mean removal means the pattern survives standardization intact.
+    # Default False = the old OU behaviour, so pre-2026-09-01 runs still regenerate exactly.
+    stationary_constant: bool = False
+    stationary_amp: float = 1.0     # the constant level, in units of the other modes' unit std
 
 
 # ----------------------------------------------------------------------------- spatial patterns
@@ -207,11 +218,16 @@ def generate_field(cfg: GenConfig = GenConfig(), seed: int = 0):
     my, mx = (0.0, 0.0) if cfg.place_full_domain else (12.0, 12.0)
     my_s, mx_s = (0.0, 0.0) if cfg.place_full_domain else (6.0, 6.0)
 
-    # --- stationary (LARGE): equatorial band, slow OU ---------------------------------------
+    # --- stationary (LARGE): equatorial band ---------------------------------------------------
+    # rev3: a CONSTANT amplitude (the user's definition of stationary). The old OU drift is kept
+    # behind the flag and is now understood as a `cyclic`-class slow wanderer, not a stationary mode.
     for _ in range(cfg.n_stationary):
         phi = _equatorial_band(H, W, cy=H / 2 + rng.uniform(-4, 4), sy=rng.uniform(9, 13),
                                zero_mean=cfg.signed_patterns)
-        amp = _ou_series(rng, T, cfg.ou_tau)
+        if cfg.stationary_constant:
+            amp = np.full(T, float(cfg.stationary_amp))     # flat: var = 0, NOT standardized
+        else:
+            amp = _ou_series(rng, T, cfg.ou_tau)            # legacy drift (unit variance)
         modes.append(dict(scale="large", family="stationary", phi=phi, amp=amp))
 
     # --- cyclic (MEDIUM): sign-varying dipoles / basin waves (rev2), or blobs (legacy) --------
@@ -267,7 +283,13 @@ def generate_field(cfg: GenConfig = GenConfig(), seed: int = 0):
         Phi[0, k] = m["phi"]
         # var1 = SST: damped + phase-shifted response on shared modes
         w = cfg.sst_shared_w if shared else cfg.sst_chaotic_w
-        if cfg.sst_tau > 0:                                # rev2: first-order response
+        if np.std(m["amp"]) < 1e-12:
+            # A CONSTANT mode has no anomaly to lag or damp: the AR1 steady state IS that constant,
+            # so SST sees the same static offset. Going through `_ar1_response` would be wrong twice
+            # over -- it would add a startup transient, and its closing `_standardize` divides a
+            # zero-variance series by ~0, wiping the mode out of SST entirely (rev3, D-025).
+            a1 = m["amp"]
+        elif cfg.sst_tau > 0:                              # rev2: first-order response
             a1 = _ar1_response(m["amp"], cfg.sst_tau)
         else:                                              # legacy: fixed index shift
             lag = cfg.sst_lag if shared else 0
