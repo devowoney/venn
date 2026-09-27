@@ -13,8 +13,7 @@
 0a. **(NEXT candidates) Remaining ambiguity = stationary rungs that miss the flat cut (5 cases) and
     contaminated slow cyclic rungs (6 cases); `L_band` loses on ch4/ch6 by layout.** See 02_encoder_training D-027.
 
-0b. **`flat_target 0.95 → 0.98` — USER DECISION, measured.** Flat channels 0.8 → 1.8 per seed,
-    obedience 0.91 → 0.99, independent of the shape term (arm `flat98`).
+0b. **RESOLVED 2026-09-27: `flat_target 0.98` is the default** (flat 0.8 → 1.6 per seed).
 
 0c. **Fast-rung redundancy.** Five of nine fast channels track hidden mode m6 on seed 0, with near-
     identical traces. Revisit after 0.
@@ -68,7 +67,7 @@
 | **Partitioned frequency bands** (cyclic rungs tile only below `slow_period_min`) | The families are interleaved in frequency on this testbed (cycles 60/140/300 vs OU τ=200), so a partition puts periods 140 and 300 out of reach of every cyclic rung. Bands now deliberately OVERLAP; masks were never required to be disjoint (D-013). |
 | **`lambda_slow = 0`** once the ladder exists | Slightly worse: role obedience 0.69 vs 0.75, population 7/0/9 vs 6/1/9 (runs `20260831_091605` vs `091525`). Mean slowness stays at 1.0 as a weak tiebreak. |
 | **De-aligning the size and timescale ladders** (`slow_size_frac=0.08`, so flat rungs are not pinned to the largest footprints) | Footprint did halve (2590 → 1318 cells) but alignment with the constant mode's pattern did NOT improve (\|corr\| 0.27 either way) and role obedience fell 1.00 → 0.94, with one flat channel instead of two. The diffuseness is not caused by the size ladder. Knob kept at 0.0; the reasoning still applies to a testbed whose static pattern is small. |
-| **`flat_target = 0.8`** | Corresponds to `amp_ratio` 0.25 — the hinge would go quiet before the channel passed the labeller's 0.05 cut. The objective and the readout must agree on where the bar is. Now 0.95. |
+| **`flat_target = 0.8`** | Corresponds to `amp_ratio` 0.25 — the hinge would go quiet before the channel passed the labeller's 0.05 cut. The objective and the readout must agree on where the bar is. Then 0.95, now 0.98 (past the cut, D-027). |
 | **Plain argmax over all four structure shares, including the level** | `level² > var` is merely `amp_ratio < 1`, so a channel fluctuating at 50% of its level would score "stationary". Counter-example: ch14 of `20260901_080655`, `amp_ratio` 0.526, plainly broadband. The level gates; the structure votes. |
 | **Normalizing the cancellation diagnostic by the plain SUM of the parts** | Reads 0.634 for the flat channel, which looks like partial cancellation — but three independent parts already give 0.577 of the sum, so it is what chance predicts. Normalize against independence (`sqrt(Σ sd²)`) instead; the wrong baseline manufactures findings. |
 | **A persistence check for stationarity** (level stable across sub-windows / held-out time) | Offered to the user, who chose against it: flatness over the record is enough. |

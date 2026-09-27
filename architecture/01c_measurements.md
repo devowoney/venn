@@ -145,3 +145,19 @@ Mean: ambiguous 2.2, distinct periods 2.6 (baseline 2.4, buggy fast-only 1.4), f
 (buggy averaging, `lambda_line 1.43`): 286/143/61/61/61. Early trajectory, seed 0, in-band power of
 ch2 / ch3 at steps 1 → 20 → 5000: baseline 0.18→0.74→0.88 / 0.08→0.55→0.85; buggy fast-only
 0.18→0.21→0.22 / 0.08→0.21→0.23 (`.tmps/figs_cyclic_race.png`).
+
+### `flat_target 0.98` on the fixed default (2026-09-27), runs `flat98fix_seed{0..4}`
+
+| | flat_target 0.95 (`fixavg`) | 0.98 (`flat98fix`) |
+|---|---|---|
+| flat channels / seed | 0.8 | **1.6** |
+| role obedience | 0.93 | **0.97** |
+| ambiguous channels / seed | 2.2 | **1.2** |
+| distinct cyclic periods | 2.6 | 2.6 |
+| balanced recon R² (seed 0 / seed 3) | 0.7765 / 0.7654 | 0.7764 / 0.7654 |
+
+Stationary-rung amp_ratio (ch0, ch1), 0.95 → 0.98: s0 0.053, 0.028 → 0.040, 0.023; s1 0.065, 0.068 →
+0.046, 0.050; s2 0.041, 0.069 → 0.037, 0.051; s3 0.059, 0.042 → 0.046, 0.033; s4 0.055, 0.050 →
+0.042, 0.038. Every rung flatter; the two remaining misses sit at 0.050 / 0.051. No rung reaches the
+target's 0.02 — the hinge stays active, so flatness is limited by what the masks can align with,
+not by the push.

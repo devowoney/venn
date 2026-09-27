@@ -137,11 +137,14 @@ train:
                             #          rung with L_level and EXEMPTS it from l_var / l_energy /
                             #          L_band / L_line, all of which presume a channel fluctuates.
                             # memory = be a slow DRIFT (my earlier misreading). Kept as an ablation.
-    flat_target: 0.95   # hinge: level/(level+fluct) >= this on the slow rungs. Must be consistent
-                        # with the labeller, or the hinge goes quiet before the channel qualifies:
-                        # r = 1/(1+amp_ratio), and family.py calls a series flat at amp_ratio < 0.05
-                        # -> r > 0.952. A target of 0.8 would have stopped at amp_ratio 0.25, i.e.
-                        # a channel that still visibly moves. 0.95 lands exactly on the cut.
+    flat_target: 0.98   # hinge: level/(level+fluct) >= this on the slow rungs. r = 1/(1+amp_ratio),
+                        # and family.py calls a series flat at amp_ratio < 0.05, i.e. r > 0.952.
+                        # 0.98 (amp_ratio ~0.02) sits PAST the cut, so the hinge still pushes when a
+                        # channel reaches it. 0.95 landed exactly on the cut: the push faded to ~0
+                        # just before the line and rungs parked at amp_ratio 0.05-0.07 (e.g. seed 3
+                        # ch0 at 0.059). Measured, 5 seeds (D-027): flat channels 0.8 -> 1.6 per
+                        # seed, obedience 0.93 -> 0.97, cyclic coverage and recon unchanged. A target
+                        # of 0.8 (amp_ratio 0.25) was rejected earlier: the hinge quits far too soon.
     slow_size_frac: 0.0   # footprint target for the FLAT rungs, overriding their place on the D-020
                         # size ladder. 0 = keep the ladder value (DEFAULT).
                         # TESTED AND REJECTED at 0.08 (run 20260901_080655 vs 20260901_080506): the

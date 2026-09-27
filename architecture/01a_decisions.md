@@ -159,6 +159,9 @@ rungs keep `L_line`. Config: `shape_objective: structure`, `struct_rungs: fast`,
 **Superseded variant — `struct_rungs: all`** (also `struct_target ≥ 0.85` on cyclic rungs). Rejected
 after the figures showed every cyclic rung on one cycle (F-16). Kept as an ablation.
 
-**Not decided — left to the user:** `lambda_struct = 10` (0 ambiguous channels, but measured only
-with the rejected all-rungs variant) and `flat_target 0.95 → 0.98` (flat channels 0.8 → 1.8 per
-seed, obedience 0.91 → 0.99). Config holds `flat_target: 0.95`.
+**`flat_target 0.95 → 0.98` — DECIDED by the user, 2026-09-27.** 0.95 sat exactly on the labeller's
+cut, so the hinge faded just before the line. On the fixed default, 5 seeds: flat channels 0.8 → 1.6
+per seed, obedience 0.93 → 0.97, ambiguous 2.2 → 1.2, cyclic coverage and recon unchanged.
+
+**Not decided:** `lambda_struct = 10` (measured only with the rejected all-rungs variant; not
+re-tested on the fast-only default).

@@ -154,9 +154,13 @@ level_i = |mean_t s_i|      fluct_i = std_t s_i        r_i = level_i / (level_i 
 L_level = mean over SLOW rungs of relu(flat_target - r_i)^2
 ```
 
-  `flat_target` MUST match the labeller's cut or the hinge goes quiet before the channel qualifies:
-  `r = 1/(1 + amp_ratio)`, and flat means `amp_ratio < 0.05`, so `r > 0.952` -> `flat_target=0.95`.
-  A first attempt at 0.8 corresponded to `amp_ratio` 0.25, i.e. a channel that still visibly moves.
+  `flat_target` MUST sit at or past the labeller's cut or the hinge goes quiet before the channel
+  qualifies: `r = 1/(1 + amp_ratio)`, and flat means `amp_ratio < 0.05`, so `r > 0.952`. A first
+  attempt at 0.8 corresponded to `amp_ratio` 0.25, i.e. a channel that still visibly moves. 0.95 sat
+  exactly ON the cut and left no margin: the push faded just before the line and rungs parked at
+  0.05–0.07. **Default since 2026-09-27: `flat_target = 0.98`** (amp_ratio ≈ 0.02) — flat channels
+  0.8 → 1.6 per seed, obedience 0.93 → 0.97, no cost to cyclic coverage or reconstruction (D-027).
+  No rung reaches 0.02 (best 0.023), so the limit is now what the masks can align with, not the push.
   `L_level` also replaces the protection `l_energy` was giving those rungs (F-6): it is what keeps a
   flat channel on the static STRUCTURE instead of in an empty corner.
 
@@ -320,7 +324,8 @@ now owns. `struct_rungs: all` reproduces the first variant; `shape_objective: li
 | `base` — `shape_objective: line` | 6.8 | 0.44 | **2.4** | 0.8 | 0.91 |
 | `struct` — L_struct on all rungs, λ 3.5 | 3.0 | 0.31 | 1.0 | 0.6 | 0.91 |
 | `fastonly` — L_line averaged over 5 rungs (bug) | 1.2 | 0.31 | 1.4 | 0.8 | 0.93 |
-| **`fixavg` — default, L_line averaged over 14** | **2.2** | 0.31 | **2.6** | 0.8 | 0.93 |
+| `fixavg` — L_line averaged over 14, flat_target 0.95 | 2.2 | 0.31 | 2.6 | 0.8 | 0.93 |
+| **`flat98fix` — default, + flat_target 0.98** | **1.2** | 0.31 | **2.6** | **1.6** | **0.97** |
 
 "Ambiguous" = structure share in 0.35–0.65 (|margin| < 0.30), flat channels excluded. The 0.30 is a
 convenience, not a calibration: hidden chaotic mode m6 sits exactly on its edge (margin −0.30).

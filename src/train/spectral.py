@@ -260,7 +260,9 @@ def spectral_terms(S_win: torch.Tensor, band: torch.Tensor, is_cyclic: torch.Ten
                              those channels; `L_level` drives them instead.
     line_w    [K] float      separate weight for `L_line` only (defaults to `chan_w`). Under D-027
                              with `struct_rungs: fast`, the FAST rungs' shape is owned by
-                             `L_struct`, so `L_line` is kept on the cyclic rungs alone.
+                             `L_struct`, so `L_line` is kept on the cyclic rungs alone. It only
+                             selects rungs: the average is still over `chan_w`, so the per-rung
+                             weight does not change with how many rungs are selected.
 
     Returns (l_band, l_line, diag) with diag holding per-channel `bandfrac` / `linefrac` for logging.
     """
@@ -290,7 +292,11 @@ def spectral_terms(S_win: torch.Tensor, band: torch.Tensor, is_cyclic: torch.Ten
     pen = torch.where(is_cyclic,
                       torch.relu(line_target - linefrac) ** 2,      # cyclic rungs: BE a line
                       torch.relu(linefrac - line_cap) ** 2)         # others: do NOT be a line
+    # `line_w` SELECTS which rungs get the line hinge, but the average stays over all dynamic rungs
+    # (`w_sum`), so each selected rung keeps the per-rung weight it had in D-024. Averaging over the
+    # selected rungs only made the hinge 14/5 = 2.8x stronger per cyclic rung, which pinned them on the
+    # period-60 cycle they start on before L_band could move them to their octaves (seed 0 diagnosis).
     lw = w if line_w is None else line_w
-    l_line = (pen * lw).sum() / lw.sum().clamp_min(1e-6)
+    l_line = (pen * lw).sum() / w_sum
 
     return l_band, l_line, dict(bandfrac=bandfrac.detach(), linefrac=linefrac.detach())

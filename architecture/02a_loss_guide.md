@@ -162,22 +162,24 @@ L_band     = mean over dynamic rungs of relu(0.5 − bandfrac_i)²
 
 ## 5. Group 3 — which family
 
-### `L_level` — stationary rungs: "don't move"  (λ = 0.13)
+### `L_level` — stationary rungs: "don't move"  (λ = 0.13, target 0.98)
 
 ```
 r_i     = |mean(s_i)| / (|mean(s_i)| + std(s_i))       1 = perfectly constant, 0 = pure fluctuation
-L_level = mean over stationary rungs of relu(0.95 − r_i)²
+L_level = mean over stationary rungs of relu(0.98 − r_i)²
 ```
 
-- **Plain words:** the channel's level must dwarf its fluctuation. `r ≥ 0.95` is exactly the
-  labeller's flat cut `amp_ratio = std/|mean| < 0.05`.
+- **Plain words:** the channel's level must dwarf its fluctuation. The labeller calls a channel flat
+  when `amp_ratio = std/|mean| < 0.05`, i.e. `r > 0.952`; the target 0.98 (amp_ratio ≈ 0.02) sits past it.
 - **Why it must exist:** a constant lives entirely in the channel's **mean**, and every other term
   works on the centred channel. Worse, `l_var` and `l_energy` actively forbid a flat channel — hence
   the exemptions.
 - **Hard part:** the static pattern is spatially zero-mean, so a non-negative mask must align with
   one signed lobe of it; a random mask of the same size is nowhere near flat (amp_ratio ≈ 66).
-- **Known weakness:** 0.95 sits exactly on the readout's cut, leaving no margin; flat channels per
-  seed are fragile (0–2). `flat_target 0.98` measured 0.8 → 1.8 per seed — **undecided (user)**.
+- **Why 0.98, not 0.95:** 0.95 sat exactly on the readout's cut, so the push faded to nothing just
+  before the line and stationary rungs parked at amp_ratio 0.05–0.07. 0.98 (amp_ratio ≈ 0.02) keeps
+  pushing past the cut: flat channels 0.8 → 1.6 per seed, at no cost elsewhere. No rung reaches 0.02;
+  the remaining limit is what a non-negative mask can align with, not the target.
 
 ### `L_line` — cyclic rungs: "be one clean oscillation"  (λ = 4.0)
 
