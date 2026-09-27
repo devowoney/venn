@@ -223,18 +223,33 @@ def main(cfg: DictConfig) -> None:
             L = int(sp.win_len)
             w0 = torch.randint(0, T - L + 1, (int(sp.n_win),), generator=g)   # window starts
             S_win = torch.stack([S_all[s0:s0 + L] for s0 in w0.tolist()])     # [n_win,L,K]
-            l_band, l_line, sp_diag = spectral_terms(
-                S_win, band_w, is_cyc, float(sp.band_target), float(sp.line_target),
-                float(sp.line_cap), chan_w=w_dyn)
-            loss = loss + sp.lambda_band * l_band
             # WHICH SHAPE TERM decides cyclic-vs-chaotic (D-027). `structure` speaks the readout's
             # own language (trend+osc vs residual, cut at 0.5) and is the default; `line` is the
             # D-024 original, kept as an ablation -- its cap sat at a linefrac of 0.75 and was
             # measured SILENT on all nine fast rungs, which is why they drifted to the boundary.
-            if str(sp.shape_objective) == "structure":
-                l_struct, struct_sh = structure_term(S_all, is_cyc, is_fast,
+            use_struct = str(sp.shape_objective) == "structure"
+            # `struct_rungs: fast` (DEFAULT) applies L_struct to the FAST rungs only and leaves the
+            # cyclic rungs on L_line. Measured (seed 0): with L_struct on the cyclic rungs too, all
+            # five of them collapsed onto the period-60 cycle (baseline: 286/143/61/61/61), because
+            # `trend+osc` credits ANY clean peak and period 60 is the cleanest line in the field.
+            # The cap on the fast side has no such pull -- "be broadband" favours no mode.
+            struct_fast_only = use_struct and str(sp.struct_rungs) == "fast"
+            line_w = None
+            if use_struct:
+                # L_line stays on the cyclic rungs only when L_struct owns the fast ones; with
+                # `struct_rungs: all` it is off everywhere (the first D-027 variant)
+                line_w = (is_cyc.float() * w_dyn) if struct_fast_only else torch.zeros(K, device=device)
+            l_band, l_line, sp_diag = spectral_terms(
+                S_win, band_w, is_cyc, float(sp.band_target), float(sp.line_target),
+                float(sp.line_cap), chan_w=w_dyn, line_w=line_w)
+            loss = loss + sp.lambda_band * l_band
+            if use_struct:
+                cyc_for_struct = torch.zeros_like(is_cyc) if struct_fast_only else is_cyc
+                l_struct, struct_sh = structure_term(S_all, cyc_for_struct, is_fast,
                                                      float(sp.struct_target), float(sp.struct_cap))
                 loss = loss + sp.lambda_struct * l_struct
+                if struct_fast_only:
+                    loss = loss + sp.lambda_line * l_line
             else:
                 l_struct, struct_sh = torch.zeros((), device=device), None
                 loss = loss + sp.lambda_line * l_line

@@ -119,14 +119,19 @@ train:
     #             nine fast rungs while six of them sat within 0.15 of the readout's boundary -- the
     #             objective and the readout were not asking the same question.
     shape_objective: structure
+    struct_rungs: fast    # fast = L_struct caps the FAST rungs only; cyclic rungs keep L_line (DEFAULT).
+                          # all  = L_struct on cyclic AND fast rungs (first D-027 variant). Measured on
+                          #        seed 0: all five cyclic rungs collapsed onto the period-60 cycle
+                          #        (baseline 286/143/61/61/61), since trend+osc credits ANY clean peak.
     struct_target: 0.85   # cyclic rungs: structure share >= this. The hidden cyclic modes measure
                           # 0.94, so this is just under what the physics itself achieves.
     struct_cap: 0.30      # fast rungs: structure share <= this. The hidden CHAOTIC modes measure
                           # 0.17-0.35 (median 0.21), so a fast rung is asked for no more oscillatory
                           # character than the truth has. Both bars leave a MARGIN either side of
                           # the 0.5 cut, so a satisfied channel is unambiguous, not a coin flip.
-    lambda_struct: 3.5    # GRADIENT-matched to lambda_white at init (D-019): measured K=16 seed 0,
-                          # |g_white|=5.1e-3, |g_struct|=1.5e-3 -> 3.47 (.tmps/grad_match.py).
+    lambda_struct: 2.3    # GRADIENT-matched to lambda_white at init (D-019), K=16 seed 0, fast rungs
+                          # only: |g_white|=5.1e-3, |g_struct|=2.3e-3 -> 2.26 (.tmps/grad_match.py).
+                          # (3.5 when the term also covered the cyclic rungs, struct_rungs: all.)
     # --- what the SLOW rungs are asked for (D-025) ---
     slow_objective: level   # level  = be CONSTANT (the user's definition of stationary): drives the
                             #          rung with L_level and EXEMPTS it from l_var / l_energy /

@@ -2,6 +2,20 @@
 
 ## Open — in the order I would tackle them
 
+0. **(2026-09-27, NEXT) The cyclic rungs collapse onto one cycle per seed (F-16).** With D-027
+   fast-only, seed 0 keeps all five cyclic rungs on period 61; the baseline keeps 286 and 143. Cause
+   unknown. Diagnose on seed 0 first: dominant period and in-band power of each cyclic rung over
+   training, baseline vs fast-only, and whether the baseline's fast rungs carried slow content. Then
+   choose: credit only the peak inside the rung's own octave; a stronger band for cyclic rungs; or a
+   new rung layout (5 cyclic rungs for 3 cycles, and no cycle in the 24–40 octave — a user decision:
+   fit the testbed, or stay generic for a real ocean).
+
+0b. **`flat_target 0.95 → 0.98` — USER DECISION, measured.** Flat channels 0.8 → 1.8 per seed,
+    obedience 0.91 → 0.99, independent of the shape term (arm `flat98`).
+
+0c. **Fast-rung redundancy.** Five of nine fast channels track hidden mode m6 on seed 0, with near-
+    identical traces. Revisit after 0.
+
 1. **The cyclic rungs are the biggest remaining gap (rev2 measurement; recheck on rev3).**
    On the rev2 field only 1 of 5 cyclic rungs reached a clean spectral line (`line_frac` 0.92; the
    rest 0.52–0.60). A non-negative regional mask sums everything under its footprint, and
@@ -46,6 +60,7 @@
 
 | alternative | why rejected |
 |---|---|
+| **`L_struct` on the cyclic rungs too** (`struct_rungs: all`, `struct_target 0.85`) | `trend+osc` credits any clean peak, so every cyclic rung moved to the period-60 cycle (seed 0: 61×5 vs baseline 286/143/61/61/61); distinct periods 1.0 vs 2.4. The ambiguity count (3.0) looked good and hid it (F-16). |
 | **Per-channel exponential-memory target** `rho_i(L) = exp(-L/tau_i)` as the ladder's mechanism | Wrong for a cyclic channel: its ACF oscillates and its long-lag gap reaches 4, twice the exponential maximum, so the term would actively suppress the cyclic family it was meant to create. Abandoned before coding, on the arithmetic. |
 | **Partitioned frequency bands** (cyclic rungs tile only below `slow_period_min`) | The families are interleaved in frequency on this testbed (cycles 60/140/300 vs OU τ=200), so a partition puts periods 140 and 300 out of reach of every cyclic rung. Bands now deliberately OVERLAP; masks were never required to be disjoint (D-013). |
 | **`lambda_slow = 0`** once the ladder exists | Slightly worse: role obedience 0.69 vs 0.75, population 7/0/9 vs 6/1/9 (runs `20260831_091605` vs `091525`). Mean slowness stays at 1.0 as a weak tiebreak. |

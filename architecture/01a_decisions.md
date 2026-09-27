@@ -139,3 +139,26 @@ level would score "stationary". Counter-example on the record: ch14 of run `2026
 
 **What D-026 does NOT change:** D-005 selection semantics, D-013 (masks are sensors, overlap is
 fine), or the ladder mechanics of D-024/D-025. It changes the labeller and what counts as success.
+
+---
+
+## D-027 — `L_struct`: the fast rungs' shape is scored in the readout's own quantity
+
+**Date:** 2026-09-10 → 2026-09-27. **Status:** BUILT and measured (5 seeds). **Source:** user asked to
+refine the observer ("ambiguous signal cyclic or chaotic"); fast-rungs-only chosen by the user after
+the first variant collapsed the cyclic rungs.
+
+**Decision.** Add `L_struct = mean over FAST rungs of relu((trend+osc)/total − 0.30)²`, computed on the
+full series exactly as `family.decompose` does. It replaces `L_line` on the fast rungs; the cyclic
+rungs keep `L_line`. Config: `shape_objective: structure`, `struct_rungs: fast`, `struct_cap: 0.30`,
+`lambda_struct: 2.3` (gradient-matched).
+
+**Why.** `line_cap` measured silent on all nine fast rungs while six sat near the labeller's 0.5 cut
+(F-15). The cap 0.30 is the physics' own bar: the hidden chaotic modes measure 0.17–0.35.
+
+**Superseded variant — `struct_rungs: all`** (also `struct_target ≥ 0.85` on cyclic rungs). Rejected
+after the figures showed every cyclic rung on one cycle (F-16). Kept as an ablation.
+
+**Not decided — left to the user:** `lambda_struct = 10` (0 ambiguous channels, but measured only
+with the rejected all-rungs variant) and `flat_target 0.95 → 0.98` (flat channels 0.8 → 1.8 per
+seed, obedience 0.91 → 0.99). Config holds `flat_target: 0.95`.

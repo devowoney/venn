@@ -110,3 +110,22 @@ Baseline channels the user flagged as cyclic (rev2 run `20260831_091454`): ch2 t
 rebound **+0.74** (genuinely oscillatory); ch4 −0.15/−0.04, ch5 −0.31/−0.05, ch6 −0.40/−0.31,
 ch10 −0.61/−0.47 (no rebound). Superseded as a classification basis by D-026, but kept because it
 documents why raw-series statistics mislead: they measure the residue, not the structure.
+
+## D-027 shape term — 5 seeds per arm (runs `.tmps/runs/<arm>_seed{0..4}`, rev3 field)
+
+| arm | config | ambiguous ch | fast struct max | distinct cyclic periods | flat ch | obedience |
+|---|---|---|---|---|---|---|
+| `base` | `shape_objective: line` | 6.8 | 0.44 | 2.4 | 0.8 | 0.91 |
+| `struct` | structure, all rungs, λ 3.5 | 3.0 | 0.31 | 1.0 | 0.6 | 0.91 |
+| `flat98` | line, `flat_target 0.98` | 5.8 | 0.44 | — | 1.8 | 0.99 |
+| `comb` | structure all, λ 3.5, flat 0.98 | 2.2 | 0.31 | — | 1.8 | 0.99 |
+| `lam10` | structure all, λ 10, flat 0.98 | 0.0 | 0.30 | 1 (seed 0) | 2.0 | 1.00 |
+| `fastonly` | **default**: structure fast, λ 2.3 | 1.2 | 0.31 | 1.4 | 0.8 | 0.93 |
+
+Cyclic rung periods (ch2–6), baseline → fast-only: s0 286/143/61/61/61 → 61×5; s1 286/143/61/61/143 →
+61×5; s2 286/143/143/143/286 → same; s3 143×5 → 286/286/143/143/143; s4 286/143/61/61/61 → 61×5.
+FFT periods are 2000/k: 286 = the period-300 cycle, 143 = 140, 61 = 60.
+
+Collective, seed 0: balanced recon R² base 0.7765 / comb 0.7764 / lam10 0.7765 / fastonly 0.7765;
+effective rank 9.61 / 9.28 / 9.49 / 9.44; slowness_spread 88.3 / 16.0 / 17.1 / 20.1.
+Gradients at init (K=16, seed 0): |g_white| 5.1e-3; |g_struct| 1.5e-3 (all rungs), 2.3e-3 (fast only).

@@ -247,7 +247,7 @@ def structure_term(S_all: torch.Tensor, is_cyclic: torch.Tensor, is_fast: torch.
 
 def spectral_terms(S_win: torch.Tensor, band: torch.Tensor, is_cyclic: torch.Tensor,
                    band_target: float, line_target: float, line_cap: float,
-                   chan_w: torch.Tensor | None = None):
+                   chan_w: torch.Tensor | None = None, line_w: torch.Tensor | None = None):
     """Band-placement + line-shape hinges from windowed channel series.
 
     S_win     [n_win, L, K]  contiguous windows of the channel series (GRAD-CARRYING)
@@ -258,6 +258,9 @@ def spectral_terms(S_win: torch.Tensor, band: torch.Tensor, is_cyclic: torch.Ten
                              its power in the DC bin that this function deliberately zeroes -- so
                              both hinges here would be scored on its leftover noise. Pass 0 for
                              those channels; `L_level` drives them instead.
+    line_w    [K] float      separate weight for `L_line` only (defaults to `chan_w`). Under D-027
+                             with `struct_rungs: fast`, the FAST rungs' shape is owned by
+                             `L_struct`, so `L_line` is kept on the cyclic rungs alone.
 
     Returns (l_band, l_line, diag) with diag holding per-channel `bandfrac` / `linefrac` for logging.
     """
@@ -287,6 +290,7 @@ def spectral_terms(S_win: torch.Tensor, band: torch.Tensor, is_cyclic: torch.Ten
     pen = torch.where(is_cyclic,
                       torch.relu(line_target - linefrac) ** 2,      # cyclic rungs: BE a line
                       torch.relu(linefrac - line_cap) ** 2)         # others: do NOT be a line
-    l_line = (pen * w).sum() / w_sum
+    lw = w if line_w is None else line_w
+    l_line = (pen * lw).sum() / lw.sum().clamp_min(1e-6)
 
     return l_band, l_line, dict(bandfrac=bandfrac.detach(), linefrac=linefrac.detach())

@@ -147,3 +147,28 @@ Ladder run ch1: 3 hidden modes reach the footprint, index **1.01** → this stat
 read 0.634, which looks like partial cancellation — but three independent parts already give 0.577 of
 the sum, so 0.634 is almost exactly what chance predicts. **The wrong baseline would have
 manufactured a finding.**
+
+---
+
+## F-15. The fast rungs were ambiguous because no loss term opposed it
+
+Run `20260901_080506`: 7 of 16 channels had structure share in 0.35–0.65, all fast rungs (0.33–0.44).
+`line_cap` (±2-bin line fraction ≤ 0.75) was silent on all nine fast rungs (0.15–0.45). The hidden
+chaotic modes score 0.17–0.35 and two fast channels (ch7, ch10) reached 0.16, so broadband channels
+were achievable. **The objective and the readout must measure the same QUANTITY, not only agree on a
+threshold** — the F-13 lesson in a harder form.
+
+Stationary side, same run: a random mask of the same 2590-cell footprint gives amp_ratio ≈ 66, the
+learned one 0.023–0.049. Flatness is a real achievement, not free averaging (my hypothesis, refuted).
+It is hard because the static component is spatially zero-mean (time-mean map rms 0.795, global mean
+0.0000), so a non-negative mask must align with one signed lobe. It is also fragile across seeds:
+baseline flat channels per seed 2/0/1/0/1 — `flat_target 0.95` sits exactly on the 0.05 cut.
+
+## F-16. A good ambiguity count hid a collapse of the cyclic timescales
+
+`L_struct` on all rungs scored 3.0 ambiguous channels (baseline 6.8), but the kernel/signal figures
+showed every cyclic rung on the same cycle: dominant periods 61/61/61/61/61 on seed 0 vs the
+baseline's 286/143/61/61/61. `trend+osc` credits any clean peak, and period 60 is the cleanest line.
+The `slowness_spread` drop (88 → 16) flagged earlier was this collapse. Fast-only (D-027) cuts
+ambiguity to 1.2 but still averages only 1.4 distinct periods (baseline 2.4); seed 0 still collapses.
+Cause open. **A metric about one failure mode says nothing about the others — look at the figure.**

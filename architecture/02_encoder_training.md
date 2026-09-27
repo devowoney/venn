@@ -30,6 +30,8 @@ field[T,V,H,W]  --SelectionEncoder-->  S[T,K]   (s_i = <mask_i, field>, norm="no
      L_recon  = ‖X - [1,S]W‖^2 / ‖X‖^2                  # = 1 - R^2, coverage       (D-019)
      L        = λ_slow·L_slow + λ_white·L_white + λ_var·L_var
                 + λ_energy·L_energy + λ_recon·L_recon + λ_size·L_size
+                + ladder terms: L_band, L_line (cyclic rungs), L_struct (fast rungs), L_level
+                  (stationary rungs) -- see the D-024 / D-025 / D-027 sections below
    mode "hard" / "soft": ABLATIONS. Both collapse -- see "Failure modes" below.
 ```
 
@@ -269,6 +271,75 @@ and let module 2 handle mixed channels. The second slow rung also fails, and it 
 footprint on the size ladder — the D-021 conflict between `L_energy` and the biggest rung. Not
 aligning the two ladders is the obvious next test.
 
+## Fast-rung shape term `L_struct` (D-027, added 2026-09-10 → 2026-09-27)
+
+**The problem.** Channels were "ambiguous cyclic or chaotic" (user, 2026-09-10). Measured on run
+`20260901_080506`: 7 of 16 channels sat within the ambiguity band, **all of them fast rungs**, at
+structure share 0.33–0.44 against the labeller's cut at 0.5. The cyclic rungs were decisive
+(0.74–0.93). The hidden chaotic modes score 0.17–0.35, so the fast channels really were
+contaminated by oscillatory content — an encoder problem, not a labeller problem.
+
+**Root cause: the objective and the readout asked different questions.** The labeller votes on
+`(trend + osc) / total` vs `residual / total` (D-026). The training hinge `line_cap` scored power
+within ±2 bins of the peak, capped at 0.75, on 512-step windows. It was measured **silent on all nine
+fast rungs** (they sat at 0.15–0.45), so nothing ever pushed them to be broadband. Same lesson as
+`flat_target`/`FLAT_THR` (D-025), in a harder form: there the two disagreed on the *threshold*, here
+on the *quantity*.
+
+**The term** (`structure_term` in `src/train/spectral.py`):
+
+```
+S_all    = enc(field)                          # [T,K] full record -- the same measurement the probe makes
+p_i(k)   = |rFFT(s_i - mean)|^2, DC dropped
+trend_i  = power in bins 1..3                  # < 4 cycles in the record: the drift band
+osc_i    = power in the dominant peak's half-power band above bin 4, at least ±2 bins
+struct_i = (trend_i + osc_i) / total_i         # = the labeller's `cyclic_share`
+L_struct = mean over FAST rungs of relu(struct_i - struct_cap)^2      struct_cap = 0.30
+```
+
+- It asks a fast rung for at least 70% broadband power. The cap is calibrated on the physics: the
+  hidden chaotic modes measure 0.17–0.35.
+- It never filters the signal. `s_i = <mask_i, field>` is unchanged (D-005); the gradient moves the
+  mask toward cells whose signal is broadband.
+- Peak location and band edges are detached (integer set memberships); the power summed inside them
+  is differentiable. A ratio of powers → scale-free in value and gradient (D-017).
+- `lambda_struct = 2.3`, gradient-matched to `lambda_white` at init, K=16 seed 0:
+  `|g_white| = 5.1e-3`, `|g_struct| = 2.3e-3`.
+
+**Why fast rungs ONLY (`struct_rungs: fast`, default).** The first variant also asked the cyclic
+rungs for `struct ≥ 0.85`. `trend + osc` credits ANY clean peak and never checks the rung's assigned
+octave, so on seed 0 all five cyclic rungs moved to the period-60 cycle, the cleanest line in the
+field (baseline: 286/143/61/61/61). The cap on the fast side favours no mode. The cyclic rungs keep
+`L_line` (`line_target = 0.85`); `L_line` is switched off on the fast rungs, whose shape `L_struct`
+now owns. `struct_rungs: all` reproduces the first variant; `shape_objective: line` reproduces D-024.
+
+**Measured (K=16, 5000 steps, 5 seeds each, runs `.tmps/runs/<arm>_seed{0..4}`):**
+
+| arm | ambiguous ch / seed | fast struct max | distinct cyclic periods (of 3) | flat ch / seed | role obedience |
+|---|---|---|---|---|---|
+| `base` — `shape_objective: line` | 6.8 | 0.44 | **2.4** | 0.8 | 0.91 |
+| `struct` — L_struct on all rungs, λ 3.5 | 3.0 | 0.31 | 1.0 | 0.6 | 0.91 |
+| **`fastonly` — default** | **1.2** | 0.31 | 1.4 | 0.8 | 0.93 |
+
+"Ambiguous" = structure share in 0.35–0.65 (|margin| < 0.30), flat channels excluded. The 0.30 is a
+convenience, not a calibration: hidden chaotic mode m6 sits exactly on its edge (margin −0.30).
+Coverage is unchanged (balanced recon R² 0.7765 vs 0.7765, seed 0).
+
+**Known open gap — the cyclic rungs collapse onto one cycle per seed.** Fast-only fixes the
+ambiguity, but it does NOT restore the slow cycles: seed 0 keeps all five cyclic rungs on period 61,
+where the baseline on the same seed keeps 286 and 143. The collapse also exists in the baseline
+(seed 3: all five on 143), and fast-only makes it more frequent (2.4 → 1.4 distinct). The cause is
+not yet known — it is not the cyclic side of `L_struct`, since fast-only removed it. Two built-in
+contributors: `L_band` holds the cyclic rungs weakly (on seed 0 the rung assigned 191–320 sits on
+61), and 5 cyclic rungs share 3 cycles, with no cycle at all in the shortest octave (24–40).
+**Next step: diagnose on seed 0** (period and in-band power of each cyclic rung over training,
+baseline vs fast-only) before choosing between in-octave credit, a stronger band, or a new layout.
+
+**Always check timescale coverage, not just ambiguity.** The first variant scored well on the
+ambiguity count while every cyclic rung sat on one cycle. `.tmps/score_runs.py` now prints each cyclic
+rung's dominant period and the number of distinct periods; the kernel/signal figures
+(`src/probes/plots.py`) are what exposed it.
+
 ## v0 defaults (D-015 — all overridable via ./config/)
 
 | knob | default | alt (deferred) |
@@ -284,6 +355,7 @@ aligning the two ladders is the obvious next test.
 | scale ladder | `lambda_size` on a geometric footprint ladder (D-020) | off (all masks shrink to ~0.3% of domain) |
 | band ladder | `spectral.enable=true`, weights gradient-matched (D-024) | off (families do not redistribute at ANY K) |
 | stationary rungs | `spectral.slow_objective=level` + `L_level` (D-025: flat = constant) | `memory` (reads stationary as a slow DRIFT -- ablation) |
+| shape term | `spectral.shape_objective=structure`, `struct_rungs=fast`: `L_struct` caps fast rungs, `L_line` on cyclic rungs (D-027) | `struct_rungs=all` (cyclic rungs collapse onto one cycle); `line` (D-024, fast rungs drift to the boundary) |
 | stationary mode | `data.stationary_constant=true` (rev3) | false = legacy OU drift at unit variance |
 | slowness gap | L2 | L1 |
 | optimizer / regime | Adam, pair-minibatch (B random consecutive pairs) | pure single-pair online |
