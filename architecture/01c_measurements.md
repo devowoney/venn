@@ -129,3 +129,19 @@ FFT periods are 2000/k: 286 = the period-300 cycle, 143 = 140, 61 = 60.
 Collective, seed 0: balanced recon R² base 0.7765 / comb 0.7764 / lam10 0.7765 / fastonly 0.7765;
 effective rank 9.61 / 9.28 / 9.49 / 9.44; slowness_spread 88.3 / 16.0 / 17.1 / 20.1.
 Gradients at init (K=16, seed 0): |g_white| 5.1e-3; |g_struct| 1.5e-3 (all rungs), 2.3e-3 (fast only).
+
+### L_line averaging fix (2026-09-27), runs `fixavg_seed{0..4}` — default config
+
+| seed | pop s/c/ch | ambiguous | flat | cyclic periods (ch2–6) |
+|---|---|---|---|---|
+| 0 | 1/6/9 | 1 | 1 | 286, 143, 61, 61, 61 |
+| 1 | 0/6/10 | 2 | 0 | 286, 143, 61, 61, 143 |
+| 2 | 1/6/9 | 3 | 1 | 286, 143, 143, 143, 286 |
+| 3 | 1/6/9 | 4 | 1 | 286, 286, 143, 143, 143 |
+| 4 | 1/6/9 | 1 | 1 | 286, 143, 61, 61, 61 |
+
+Mean: ambiguous 2.2, distinct periods 2.6 (baseline 2.4, buggy fast-only 1.4), flat 0.8, obedience
+0.93, fast struct max 0.31. No ambiguous fast rung on any seed. Seed-0 ablation `ablate_linenorm_seed0`
+(buggy averaging, `lambda_line 1.43`): 286/143/61/61/61. Early trajectory, seed 0, in-band power of
+ch2 / ch3 at steps 1 → 20 → 5000: baseline 0.18→0.74→0.88 / 0.08→0.55→0.85; buggy fast-only
+0.18→0.21→0.22 / 0.08→0.21→0.23 (`.tmps/figs_cyclic_race.png`).

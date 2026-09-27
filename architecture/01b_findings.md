@@ -172,3 +172,13 @@ baseline's 286/143/61/61/61. `trend+osc` credits any clean peak, and period 60 i
 The `slowness_spread` drop (88 → 16) flagged earlier was this collapse. Fast-only (D-027) cuts
 ambiguity to 1.2 but still averages only 1.4 distinct periods (baseline 2.4); seed 0 still collapses.
 Cause open. **A metric about one failure mode says nothing about the others — look at the figure.**
+
+## F-17. The cyclic collapse was my own averaging bug, decided in the first ~20 steps
+
+Fast-only averaged `L_line` over the 5 cyclic rungs instead of 14, a 2.8× stronger "be a clean line"
+per cyclic rung. All cyclic rungs start on the period-60 cycle (the cleanest line), and the stronger
+hinge beat `L_band` before step 20; once on a clean line a rung never left (in-band 0.22 for 4,980
+steps). Fixed by keeping the average over all dynamic rungs: distinct cyclic periods 1.4 → 2.6. Lesson:
+**restricting a term to fewer rungs silently changes its per-rung strength when it averages; select
+rungs, keep the denominator.** And the early steps decide: a hinge that is active for 5,000 steps
+without moving the rung means a lock-in, not a weak weight.

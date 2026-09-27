@@ -319,21 +319,31 @@ now owns. `struct_rungs: all` reproduces the first variant; `shape_objective: li
 |---|---|---|---|---|---|
 | `base` — `shape_objective: line` | 6.8 | 0.44 | **2.4** | 0.8 | 0.91 |
 | `struct` — L_struct on all rungs, λ 3.5 | 3.0 | 0.31 | 1.0 | 0.6 | 0.91 |
-| **`fastonly` — default** | **1.2** | 0.31 | 1.4 | 0.8 | 0.93 |
+| `fastonly` — L_line averaged over 5 rungs (bug) | 1.2 | 0.31 | 1.4 | 0.8 | 0.93 |
+| **`fixavg` — default, L_line averaged over 14** | **2.2** | 0.31 | **2.6** | 0.8 | 0.93 |
 
 "Ambiguous" = structure share in 0.35–0.65 (|margin| < 0.30), flat channels excluded. The 0.30 is a
 convenience, not a calibration: hidden chaotic mode m6 sits exactly on its edge (margin −0.30).
 Coverage is unchanged (balanced recon R² 0.7765 vs 0.7765, seed 0).
 
-**Known open gap — the cyclic rungs collapse onto one cycle per seed.** Fast-only fixes the
-ambiguity, but it does NOT restore the slow cycles: seed 0 keeps all five cyclic rungs on period 61,
-where the baseline on the same seed keeps 286 and 143. The collapse also exists in the baseline
-(seed 3: all five on 143), and fast-only makes it more frequent (2.4 → 1.4 distinct). The cause is
-not yet known — it is not the cyclic side of `L_struct`, since fast-only removed it. Two built-in
-contributors: `L_band` holds the cyclic rungs weakly (on seed 0 the rung assigned 191–320 sits on
-61), and 5 cyclic rungs share 3 cycles, with no cycle at all in the shortest octave (24–40).
-**Next step: diagnose on seed 0** (period and in-band power of each cyclic rung over training,
-baseline vs fast-only) before choosing between in-octave credit, a stronger band, or a new layout.
+**Fixed — the `L_line` averaging (2026-09-27).** The first fast-only version averaged `L_line` over
+the 5 cyclic rungs instead of all 14 dynamic rungs, making it 2.8× stronger per cyclic rung. Seed-0
+diagnosis (runs `traj_base_*`, `traj_fast_*`, each `max_steps=N` run is bit-identical to the first N
+steps of the full run): at step 1 every cyclic rung already sits on the period-60 cycle; within ~20
+steps `L_band` pulls ch2/ch3 to their octaves in the baseline (in-band 0.18 → 0.74, 0.08 → 0.55),
+while the stronger "be a clean line" held them on period 60, which already is one (in-band stuck at
+0.22 for 4,980 steps). Restoring the per-rung weight gave 286/143/61/61/61 on seed 0
+(`ablate_linenorm_seed0`, `lambda_line 1.43`). `spectral_terms` now averages the selected rungs over
+`chan_w`. Result `fixavg`: distinct cyclic periods 2.6 (baseline 2.4); the fast-rung cap is kept.
+
+**Remaining ambiguity is no longer on the fast rungs** (fast struct ≤ 0.33 on every seed). The 2.2 per
+seed are stationary rungs that miss the flat cut and then enter the vote (5 cases: seeds 0, 1, 3, 4)
+and cyclic rungs on slow cycles with chaotic contamination (6 cases, seeds 2 and 3; e.g. seed 3 ch6:
+a period-140 cycle with chaotic bursts, structure 0.63).
+
+**Still open, built into the ladder:** `L_band` loses on two cyclic rungs in every arm — ch6's octave
+(23–43) contains no cycle, ch4's (64–128) sits just above period 60 — and 5 rungs share 3 cycles, so
+some seed always misses one cycle (seed 3: no rung on period 60).
 
 **Always check timescale coverage, not just ambiguity.** The first variant scored well on the
 ambiguity count while every cyclic rung sat on one cycle. `.tmps/score_runs.py` now prints each cyclic

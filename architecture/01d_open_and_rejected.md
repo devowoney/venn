@@ -2,13 +2,16 @@
 
 ## Open — in the order I would tackle them
 
-0. **(2026-09-27, NEXT) The cyclic rungs collapse onto one cycle per seed (F-16).** With D-027
+0. **RESOLVED 2026-09-27 (F-17): averaging bug; distinct periods 1.4 → 2.6.** Original note: **The cyclic rungs collapse onto one cycle per seed (F-16).** With D-027
    fast-only, seed 0 keeps all five cyclic rungs on period 61; the baseline keeps 286 and 143. Cause
    unknown. Diagnose on seed 0 first: dominant period and in-band power of each cyclic rung over
    training, baseline vs fast-only, and whether the baseline's fast rungs carried slow content. Then
    choose: credit only the peak inside the rung's own octave; a stronger band for cyclic rungs; or a
    new rung layout (5 cyclic rungs for 3 cycles, and no cycle in the 24–40 octave — a user decision:
    fit the testbed, or stay generic for a real ocean).
+
+0a. **(NEXT candidates) Remaining ambiguity = stationary rungs that miss the flat cut (5 cases) and
+    contaminated slow cyclic rungs (6 cases); `L_band` loses on ch4/ch6 by layout.** See 02_encoder_training D-027.
 
 0b. **`flat_target 0.95 → 0.98` — USER DECISION, measured.** Flat channels 0.8 → 1.8 per seed,
     obedience 0.91 → 0.99, independent of the shape term (arm `flat98`).
