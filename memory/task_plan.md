@@ -41,7 +41,7 @@ Note: user said details will come step by step, so Discovery may be answered inc
 ## Phase Checklist
 
 - [x] Phase A – ARCHITECT: memory scaffolding initialized (task_plan / findings / progress / decisions).
-- [x] Phase A – ARCHITECT: A.N.T. SOPs written (memory/sop/00_pipeline_overview.md, 01_synthetic_generator.md). 2026-08-26.
+- [x] Phase A – ARCHITECT: A.N.T. SOPs written (SOP 00 (`decisions.md`), SOP 01). 2026-08-26.
 - [~] Phase B – BLUEPRINT: Discovery largely done; Data-First schema in CLAUDE.md. Research pass (findings.md) STILL OPEN.
 - [x] Phase L – LINK: env verified (oceanai, torch 2.13+cu126, H100); generator + K=16 smoke probe PASS. 2026-08-26.
       (encoder is PROVISIONAL plumbing; real encoder design still to confirm.)

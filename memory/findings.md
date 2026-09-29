@@ -643,7 +643,7 @@ without moving the rung means a lock-in, not a weak weight.
 > branch record written because `memory/` was gitignored and absent from the branch — "on merge,
 > reconcile with `memory/findings.md` rather than replacing it"). This file's entries are the base;
 > every additional fact of 03b is folded in. `architecture/` is retired; this file is the only home.
-> Decisions: `memory/decisions.md` D-022, D-023, D-024 (module-2), D-028. SOP: `memory/sop/03_latent_predictor.md`.
+> Decisions: `memory/decisions.md` D-022, D-023, D-024 (module-2), D-028. SOP: SOP 03 (`decisions.md`).
 >
 > F-9 … F-12: measured on the Aug 27 module-1 run (K=16, generator rev2), train `[0,1400)`,
 > val `[1432,2000)`, 472 free-running launches, warmup 32, scored to lead 64.
@@ -1012,3 +1012,42 @@ the true mode at lead 16. Best single channel chosen on the 1st half of launches
    amplitude 0.80. The GRU is far better at short lead; the analog matches it at h64 with honest amplitude.
    k=10 raises skill (h1 +0.57, h64 +0.53) but amplitude collapses to 0.52 at h64 — **W6 mean-collapse
    confirmed** (rank by var_ratio first, F-9). Joint k=1 over-disperses (amplitude 1.6–1.9).
+
+---
+
+### F-20. First D-030 streaming run: observer generalizes to unseen days; the GRU cannot use a never-reset memory (2026-09-29)
+
+Protocol D-030: encoders `d030_enc_seed{0..4}` trained on `[0,1400)` only (`train.t_train=1400`), GRU predictors
+trained on `[0,1400)` with `predictor.select=last` (no val peeking); reference = the full-record encoders
+`flat98fix_seed{0..4}` copied to `ref_enc_seed*`, same predictor settings. Probe `src/probes/stream_eval.py`,
+472 identical launches (t = 1464…1935), leads 1–64, analog L=16 k=1. Outputs `.tmps/stream_eval/`
+(`summary.txt`, `results.json`, `stream_eval.png`). Mean over 5 seeds, own channels:
+
+| D-030 group | skill h1 | h16 | h64 | amplitude h64 | honest ch |
+|---|---|---|---|---|---|
+| `gru_stream` (state never reset) | +0.638 | +0.346 | +0.112 | 1.08 | 13.6/16 |
+| `gru_zero` (zero state + 32 warmup) | **+0.669** | **+0.482** | +0.223 | 0.97 | 13.6/16 |
+| `analog_stream` (memory grows) | +0.370 | +0.259 | +0.296 | 1.03 | 16/16 |
+| `analog_frozen` (memory = train) | +0.362 | +0.248 | **+0.306** | 1.02 | 16/16 |
+
+Reference (full-record observer): `gru_zero` +0.672 / +0.526 / +0.208, `analog_stream` +0.319 / +0.290 / +0.282.
+
+1. **The observer generalizes to days it never saw (A1 holds in practice).** Training it on the past only costs
+   the GRU ~nothing at h1 (+0.669 vs +0.672) and does not hurt the analog (+0.370 vs +0.319). Sufficiency on
+   unseen days (streaming analogs → hidden truth, split-half channel choice): P61 ≥ +0.97 on every seed,
+   P143 +0.81…+0.99, but the **longest cycle P286 drops to +0.36…+0.61 on 3/5 seeds** (reference +0.61…+0.96).
+   → **W4 confirmed**: a 1400-step training record shows P286 only ~5 times; the observer is least sufficient
+   exactly for the longest dynamics.
+2. **The current GRU cannot use a streaming memory.** Never resetting the state is WORSE at every lead than
+   restarting from zero with 32 warmup steps (h16 +0.346 vs +0.482), and its h64 skill is ~0.00 in the early
+   half of the stream. Cause (by construction, not yet isolated): it was only ever TRAINED on 32-step windows
+   from a zero state, so a state built over 1400+ steps is out of its training distribution. → Under D-030
+   the predictor must be TRAINED the way it is used (state carried across the whole record, e.g. truncated
+   BPTT without resets). The zero-restart GRU is still D-030-legal (causal, frozen) — it is a sight-32 user of
+   the memory — and is the best model at h1–h16.
+3. **Growing the memory buys ~nothing yet.** `analog_stream` ≈ `analog_frozen` (h1 +0.370 vs +0.362, h64 +0.296
+   vs +0.306); late-half gains are the same for both. 600 appended steps on a 1400-step memory (+35 %) is too
+   little to show a retrieval benefit — consistent with W4; a longer stream is needed to test memory growth.
+4. **Lead-dependent winner, honest amplitude everywhere:** GRU best at h1–h16, analog best at h64
+   (+0.30 vs +0.22) with 16/16 honest channels. The checkpoint-selection leak was tiny: seed 0 `select=last`
+   +0.707 vs F-18 `select=val` +0.713.

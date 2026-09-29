@@ -14,7 +14,7 @@
    fit the testbed, or stay generic for a real ocean).
 
 0a. **(NEXT candidates) Remaining ambiguity = stationary rungs that miss the flat cut (5 cases) and
-    contaminated slow cyclic rungs (6 cases); `L_band` loses on ch4/ch6 by layout.** See `memory/sop/02_encoder_training.md` D-027.
+    contaminated slow cyclic rungs (6 cases); `L_band` loses on ch4/ch6 by layout.** See SOP 02 (`decisions.md`) D-027.
 
 0b. **RESOLVED 2026-09-27: `flat_target 0.98` is the default** (flat 0.8 → 1.6 per seed).
 
