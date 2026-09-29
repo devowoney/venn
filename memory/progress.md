@@ -17,7 +17,7 @@
   wd 0.3 best at every lead -> default. Finals `.tmps/runs_hf/final_seed{0..4}`.
 - **Validation** (`.tmps/eval_hf/final/`): RMSE h1/h8/h64 model 0.10/0.50/0.71, persistence 0.24/0.97/1.33,
   climatology 0.97. Cyclic modes held at the readout ceiling for 64 steps; chaotic modes lost after ~8-16 steps.
-  Persistence is worse than climatology beyond ~8 steps. Causality exact. Narrative below.
+  Persistence is worse than climatology beyond ~8 steps. Causality exact. Recorded D-031, F-21. Narrative below.
 
 ### 2026-09-29 — Memory made flat: `memory/sop/` and `memory/sessions/` folded into the core files
 
@@ -29,7 +29,7 @@
   section and SOP 04 came from `history-forecastor`, F-20 and the 2026-09-29 session addendum from `main`.
 - **Conflict avoidance:** every `memory/*.md` is byte-identical on `main`, `stationary-observer` and
   `history-forecastor`, so the memory directory no longer differs between branches.
-- **Open:** SOP 02 cites "D-030/D-031", but no D-031 entry exists yet.
+- **Open:** SOP 02 cites "D-030/D-031", but no D-031 entry exists yet. *(Resolved 2026-09-29: D-031 recorded.)*
 
 ### 2026-09-01 (later) — Frame corrections: structural classifier + observables, not modes (D-026)
 
@@ -1516,7 +1516,7 @@ EACH forecast's own launch state, not from the start of validation; RMSE added a
   Against climatology at h64 the cyclic channels cut the error by ~57 %, the chaotic ones by only ~10 %. The chaotic
   modes are lost after ~8-16 steps while the observer holds them at 0.94: the predictor is the limit.
 
-**Open.** Sign-off for D-031 (3-part emulator, long-series history init, train/validation halves) and F-21 (the
-table above + memorization). Next candidates: architecture comparison on this protocol; the chaotic horizon;
+**Recorded (user sign-off):** D-031 (3-part emulator, long-series history init, train/validation halves, RMSE
+readout) and F-21 (the table above + memorization). **Open.** Next candidates: architecture comparison on this protocol; the chaotic horizon;
 memorization vs a longer training series. Bug fixed: horizon histogram dropped "never" channels.
 

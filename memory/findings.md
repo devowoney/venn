@@ -1051,3 +1051,39 @@ Reference (full-record observer): `gru_zero` +0.672 / +0.526 / +0.208, `analog_s
 4. **Lead-dependent winner, honest amplitude everywhere:** GRU best at h1–h16, analog best at h64
    (+0.30 vs +0.22) with 16/16 honest channels. The checkpoint-selection leak was tiny: seed 0 `select=last`
    +0.707 vs F-18 `select=val` +0.713.
+
+---
+
+### F-21. History forecaster on unseen validation: cyclic dynamics held for 64 steps, chaos lost after ~8-16; one training trajectory is memorized (2026-09-29)
+
+Protocol D-031: encoders `.tmps/runs/hf_enc_seed{0..4}` (`data.T=4000`, `train.t_train=2000`; train-half families
+2/5/9 or 1/6/9), history forecasters `.tmps/runs_hf/final_seed{0..4}` (fit `[0,2000)`), probe
+`src/probes/eval_history_forecaster.py`, 5 seeds x 1937 streaming forecasts, all targets in `[2000,4000)`.
+Outputs `.tmps/eval_hf/final/` (`summary.txt`, `results.json`, `hf_eval.png`). RMSE in training-std units:
+
+| lead | 1 | 8 | 16 | 32 | 64 |
+|---|---|---|---|---|---|
+| RMSE model (all channels) | **0.10** | **0.50** | **0.57** | **0.67** | **0.71** |
+| RMSE persistence (launch state held) | 0.24 | 0.97 | 0.96 | 1.25 | 1.33 |
+| RMSE climatology (training mean) | 0.97 | 0.97 | 0.97 | 0.97 | 0.97 |
+| RMSE model cyclic / chaotic channels | 0.07 / 0.11 | 0.24 / 0.70 | 0.33 / 0.75 | 0.44 / 0.83 | 0.43 / 0.87 |
+| corr (all channels) | 0.99 | 0.79 | 0.74 | 0.64 | 0.60 |
+| amplitude (forecast / true std) | 0.99 | 0.89 | 0.84 | 0.83 | 0.84 |
+| hidden cyclic modes corr (ceiling 0.92) | 0.92 | 0.92 | 0.90 | 0.86 | 0.89 |
+| hidden chaotic modes corr (ceiling 0.94) | 0.93 | 0.51 | 0.41 | 0.17 | 0.12 |
+
+1. **The history forecaster beats both references at every lead**, and is causal exactly (future perturbation
+   changes no earlier forecast: max diff 0.0 on all seeds).
+2. **Cyclic dynamics are held for the whole 64 steps**, at the perfect-forecast readout ceiling (0.89 vs 0.92);
+   25/27 cyclic channels never drop below corr 0.5.
+3. **Chaos is the limit, and it is the predictor's.** Hidden chaotic modes fall below 0.5 after ~8-16 steps while
+   the observer holds them at 0.94; against climatology the chaotic channels gain only ~10 % at h64 (cyclic ~57 %).
+4. **Persistence is a misleading long-lead yardstick:** it is worse than climatology beyond ~8 steps, so skill vs
+   persistence (h64 +0.64) flatters the long leads. Report RMSE against both (D-031).
+5. **One training trajectory is memorized.** Development runs (fit `[0,1750)`): corr at h64 0.96 on seen data vs
+   0.53-0.60 on unseen `[1750,2000)`. Dev sweep, unseen slice, seeds 0/1, skill h1 / h16 / h64: dropout 0.2 + wd 0.1
+   +0.71/+0.67, +0.49/+0.49, +0.52/+0.54; stop at 1000 steps +0.69/+0.70, +0.41/+0.44, +0.54/+0.55; d=32, 2 layers
+   +0.53/+0.53, +0.46/+0.41, +0.54/+0.66; **dropout 0.4 + wd 0.3 +0.74/+0.73, +0.52/+0.53, +0.59/+0.64 (default).**
+6. **A longer history neither helps nor hurts** within validation (early vs late half identical), so histories
+   longer than any seen in training (up to 4000 steps vs 2000) are handled by the rotary positions.
+

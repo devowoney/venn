@@ -839,6 +839,32 @@ Currently t_tr = 1400, T = 2000 (the existing split).
   from D-030 — their numbers are indicative, not D-030 results.
 - Open: W3 — new days whose dynamics are absent from the training period cannot be held by the memory.
 
+## D-031 — The emulator is a 3-part recognition process; module 2 = history forecaster trained and scored on separate halves
+
+**Date:** 2026-09-29. **Source:** user rulings in the `history-forecastor` session (progress.md narrative
+2026-09-29), signed off by the user ("yes, record D-031 and F-21"). Refines D-012 and D-030. Spec: SOP 04.
+
+- **Three parts, brain analogy.** (1) eye-lobe = encoder / observer (module 1); (2) **prefrontal cortex = history
+  forecaster** (module 2); (3) unconscious memory = mapping, reconstruction, data assimilation (module 3). All three
+  are trained on ONE series of the dynamical system (here pseudo-SSH/SST), then frozen.
+- **History = the observer-captured trajectory** `psi_0..psi_t` (all K channels). The forecaster takes NO input
+  beyond it: it reads the history and predicts `psi_{t+1}` (primary) and, as a "how far" readout, `psi_{t+a}` up to
+  a = 64 via direct heads. No private state; its own forecasts are never appended (W10).
+- **Correction to D-030's "single time step input":** inference needs a LONG series of observations to INITIALIZE
+  the history. Protocol: the history is initialized with the whole training series, then grows by appending each
+  newly observed state; weights stay frozen.
+- **Training vs validation data:** ONE long field `data.T=4000`, cut into equal halves — training `[0,2000)`
+  (encoder via `train.t_train=2000`, forecaster weights, standardization, family labels, readouts) and validation
+  `[2000,4000)` (scoring only). Why one field and not two generator calls: the generator's single RNG draws the
+  spatial patterns AND the dynamics, so a second seed is a different system; one continuous trajectory keeps
+  "history initialized on the training series" meaningful. Hyperparameters are chosen on a development slice at
+  the end of the training set (`hf.t_fit=1750`), never on validation.
+- **Default model:** causal transformer over the full history (token = all K channels + increment, rotary
+  positions, zero-initialized residual heads = persistence at init); dropout 0.4, weight decay 0.3 (dev sweep, F-21).
+- **Readout standard:** RMSE (training-std units) against BOTH references — persistence (each forecast's own
+  initial condition held constant) and climatology (training mean) — plus corr, amplitude, hidden-mode readout.
+  Persistence alone is not enough: beyond ~8 steps it is worse than climatology (F-21).
+
 ## Numbering collisions with the encoder track
 
 The module-2 (`latent-predictor`) branch and the parallel `stationary-observer` (encoder) session both
