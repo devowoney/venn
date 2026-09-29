@@ -1,6 +1,6 @@
 """Synthetic SSH/SST testbed generator (Milestone 0).
 
-Implements SOP ./architecture/01_synthetic_generator.md (D-009 as reframed by D-013).
+Implements SOP ./memory/sop/01_synthetic_generator.md (D-009 as reframed by D-013).
 
 Produces a spatially heterogeneous, multi-scale field so that *which region/scale a mask sees*
 determines the temporal character it reads. Latent modes are returned as a HIDDEN answer key for

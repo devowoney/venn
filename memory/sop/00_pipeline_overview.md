@@ -5,7 +5,7 @@
 
 ## A.N.T. mapping (per LLMAIProjectInstruction.md Phase A)
 
-- **A — Architecture** (`./architecture/`): these SOPs. Goals, tensor contracts, call order, failure modes.
+- **A — Architecture** (`./memory/sop/`): these SOPs. Goals, tensor contracts, call order, failure modes.
 - **N — Navigation**: which script runs when (this doc's call order). No heavy compute here.
 - **T — Tools** (`./src/`): deterministic, testable modules. `data/ models/ train/ eval/`.
   All ephemeral I/O routes through `./tmp/`.

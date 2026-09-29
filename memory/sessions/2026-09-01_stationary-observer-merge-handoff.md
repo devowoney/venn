@@ -1,23 +1,32 @@
 # Handoff — `worktree-stationary-observer` (2026-08-31 → 2026-09-01)
 
+> Saved here on 2026-09-28 from `architecture/README.md` when `architecture/` was retired and merged into
+> `memory/`. The file table below is updated to the new `memory/` paths; the rest is as written at merge time.
+
 Self-contained record of this session's decisions, findings and measurements, written for the
 **merge back into `main`**.
 
 ## Why these files exist here and not in `memory/`
 
-`.gitignore` ignores both `memory/` and `.claude/`, so the living memory does NOT travel with a
-branch. Everything needed to review and merge this work is therefore duplicated here, in a tracked
-directory. `memory/findings.md`, `memory/decisions.md`, `memory/progress.md` and
-`memory/sessions/2026-08-31_stationary-observer-and-timescale-ladder.md` in the MAIN checkout carry
+*(Historical — as written 2026-09-01.)* `.gitignore` ignores both `memory/` and `.claude/`, so the living
+memory does NOT travel with a branch. Everything needed to review and merge this work is therefore
+duplicated here, in a tracked directory. `memory/findings.md`, `memory/decisions.md`, `memory/progress.md`
+and `memory/sessions/2026-08-31_stationary-observer-and-timescale-ladder.md` in the MAIN checkout carry
 the same content (they are shared across worktrees on disk).
 
-| file | contents |
-|---|---|
-| `01_decisions.md` | D-024, D-025, D-026 — full text, with what each supersedes |
-| `02_findings.md` | F-11 … F-14 — what was measured and what it invalidated |
-| `03_measurements.md` | every number, with the run ID that produced it |
-| `04_open_and_rejected.md` | open questions, plus alternatives already tested and rejected (do not re-try) |
-| `05_session_narrative.md` | the chronological story, including dead ends and my own corrections |
+**Update 2026-09-28:** `memory/` is now the tracked home of the project record; `architecture/` is retired
+and its contents live at the paths below.
+
+| file (now) | was | contents |
+|---|---|---|
+| `memory/decisions.md` | `01_decisions.md` → `01a_decisions.md` | D-024, D-025, D-026 — full text, with what each supersedes |
+| `memory/findings.md` | `02_findings.md` → `01b_findings.md` | F-11 … F-14 — what was measured and what it invalidated |
+| `memory/measurements.md` | `03_measurements.md` → `01c_measurements.md` | every number, with the run ID that produced it |
+| `memory/open_and_rejected.md` | `04_open_and_rejected.md` → `01d_…` | open questions, plus alternatives tested and rejected |
+| `memory/sessions/2026-08-31_stationary-observer-and-timescale-ladder.md` | `05_session_narrative.md` → `01e_…` | the story |
+
+(The `04` row's original text read "open questions, plus alternatives already tested and rejected (do not
+re-try)"; the `05` row's read "the chronological story, including dead ends and my own corrections".)
 
 ## Code changed on this branch
 
@@ -31,8 +40,8 @@ the same content (they are shared across worktrees on disk).
 | `src/probes/evaluate.py` | modified | imports the labeller, prints structure shares, `stationary_observer` readout, constant-mode guards, design-vs-recovery wording |
 | `src/probes/plots.py` | modified | features panel scaled by RMS (was standardized, which hid flatness) + `amp_ratio` per lane |
 | `config/config.yaml` | modified | `data.stationary_constant`, the whole `train.spectral` block, all weights gradient-matched |
-| `architecture/01_synthetic_generator.md` | modified | rev3 section |
-| `architecture/02_encoder_training.md` | modified | D-024/D-025/D-026 sections |
+| `architecture/01_synthetic_generator.md` (now `memory/sop/01_synthetic_generator.md`) | modified | rev3 section |
+| `architecture/02_encoder_training.md` (now `memory/sop/02_encoder_training.md`) | modified | D-024/D-025/D-026 sections |
 
 ## Merge checklist
 

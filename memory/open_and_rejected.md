@@ -1,5 +1,8 @@
 # Open questions, and alternatives already rejected
 
+> Moved verbatim from `architecture/01d_open_and_rejected.md` on 2026-09-28 (architecture/ retired; path
+> references updated). Encoder track.
+
 ## Open — in the order I would tackle them
 
 0. **RESOLVED 2026-09-27 (F-17): averaging bug; distinct periods 1.4 → 2.6.** Original note: **The cyclic rungs collapse onto one cycle per seed (F-16).** With D-027
@@ -11,7 +14,7 @@
    fit the testbed, or stay generic for a real ocean).
 
 0a. **(NEXT candidates) Remaining ambiguity = stationary rungs that miss the flat cut (5 cases) and
-    contaminated slow cyclic rungs (6 cases); `L_band` loses on ch4/ch6 by layout.** See 02_encoder_training D-027.
+    contaminated slow cyclic rungs (6 cases); `L_band` loses on ch4/ch6 by layout.** See `memory/sop/02_encoder_training.md` D-027.
 
 0b. **RESOLVED 2026-09-27: `flat_target 0.98` is the default** (flat 0.8 → 1.6 per seed).
 

@@ -1,4 +1,8 @@
-# Measurements — every number, with the run that produced it
+# measurements.md — every number, with the run that produced it
+
+> Moved verbatim from `architecture/01c_measurements.md` on 2026-09-28 (architecture/ retired). Encoder
+> track (stationary observer / timescale ladder / D-027). Evidence behind `memory/findings.md` F-11…F-17
+> (encoder track) and `memory/decisions.md` D-024…D-027.
 
 All runs: K=16, seed 0, 5000 steps unless stated. Run dirs are under `.tmps/runs/` (gitignored, so
 they do NOT travel with the branch — the numbers are recorded here instead).

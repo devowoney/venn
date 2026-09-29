@@ -1,12 +1,13 @@
-# Session narrative, 2026-08-31 → 2026-09-01 — the labeller was the bug; the ladder is the lever
+# 2026-08-31 — The labeller was the bug; the timescale ladder is the lever
 
-> Chronological record including dead ends and my own corrections. Three parts, in order: the
-> timescale ladder (D-024), the user's "stationary = constant" ruling (D-025), and the
-> global-structure / observables reframe (D-026). Later parts CORRECT earlier ones — read to the end
-> before acting on a number from part 1.
+> Long-form record (dead ends included), per `memory/sessions/README.md`.
 >
-> Tracked copy of `memory/sessions/2026-08-31_stationary-observer-and-timescale-ladder.md`
-> (`memory/` is gitignored, so the original does not travel with the branch).
+> Session span 2026-08-31 → 2026-09-01. Chronological record including dead ends and my own corrections.
+> Three parts, in order: the timescale ladder (D-024), the user's "stationary = constant" ruling (D-025),
+> and the global-structure / observables reframe (D-026). Later parts CORRECT earlier ones — read to the
+> end before acting on a number from part 1.
+> (A tracked copy of this record lived at `architecture/01e_session_narrative.md` until `architecture/`
+> was retired on 2026-09-28.)
 > Code: git worktree `.claude/worktrees/stationary-observer`, branch `worktree-stationary-observer`.
 > Nothing committed — git is the user's.
 
