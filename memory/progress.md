@@ -6,6 +6,19 @@
 
 ## Log
 
+### 2026-09-29 — History forecaster (module 2, "prefrontal cortex") built and scored on validation
+
+- **Built** (branch `history-forecastor`, SOP 04 in decisions.md): `src/models/history_forecaster.py` (causal
+  transformer over the whole history, all 16 channels per token + increment, RoPE, 64 direct residual heads),
+  `src/train/train_history_forecaster.py`, `src/probes/eval_history_forecaster.py` (one causal pass = streaming
+  forecast), `config/history_forecaster.yaml`; `train.t_train` flag in `src/train/train.py`.
+- **Data:** one field T=4000; train [0,2000), validation [2000,4000). Encoders `.tmps/runs/hf_enc_seed{0..4}`.
+- **Memorization** (dev: fit [0,1750), judged [1750,2000)): seen corr 0.96 at h64 vs unseen 0.55; dropout 0.4 +
+  wd 0.3 best at every lead -> default. Finals `.tmps/runs_hf/final_seed{0..4}`.
+- **Validation** (`.tmps/eval_hf/final/`): RMSE h1/h8/h64 model 0.10/0.50/0.71, persistence 0.24/0.97/1.33,
+  climatology 0.97. Cyclic modes held at the readout ceiling for 64 steps; chaotic modes lost after ~8-16 steps.
+  Persistence is worse than climatology beyond ~8 steps. Causality exact. Narrative below.
+
 ### 2026-09-29 — Memory made flat: `memory/sop/` and `memory/sessions/` folded into the core files
 
 - **User directive:** remove `memory/sop/` and `memory/sessions/` on every branch and integrate their content
@@ -411,6 +424,7 @@ Note: `memory/` was originally git-ignored, which is why a tracked `architecture
 | 2026-08-31 | stationary observer, timescale ladder (D-024…D-026) |
 | 2026-09-01 | stationary-observer merge handoff (was `architecture/README.md`) |
 | 2026-09-28 | module 2: trajectory as memory, "sight", W8 → one model (was `03e`) |
+| 2026-09-29 | module 2 history forecaster (prefrontal cortex), train/validation halves, RMSE readout |
 
 ### Session 2026-08-26 → 08-28 — v0 encoder objective made to work, then generator rev2
 
@@ -1461,3 +1475,48 @@ Therefore I suppose that a dynamical system has a stable observer." Then: "I agr
   a D-030 predictor must be trained in streaming mode. Memory growth (analog) buys ~nothing over 600 steps.
 - Noted: `src/probes/analog_seed_test.py` (F-19's probe) is missing from the worktree after the user's
   commits (never committed); its outputs in `.tmps/analog_seed/` remain.
+
+### 2026-09-29 — History forecaster ("prefrontal cortex"), branch `history-forecastor`
+
+Transcript: `~/.claude/projects/-home-sysadmin-jlee-venn/d8f21fdf-2f79-4015-9e88-b7c6adca487b.jsonl` (bg job,
+worktree `.claude/worktrees/history-forecastor`). No commits by the agent.
+
+**Asked, in order.** (1) Build the latent forecaster: dynamics captured by the observer = history; the forecaster
+needs no input, it reads the history and predicts the next latent state. (2) The earlier `latent-predictor` code
+was found uncommitted and lost with its worktree; replayed from transcripts into main's
+`.tmps/recovered_latent_predictor/`. User: build a NEW one on branch `history-forecastor`. (3) Framing: eye-lobe
+(encoder) / prefrontal cortex (history predictor, this work) / unconscious memory (mapping, reconstruction, DA),
+all trained on one series; inference needs a LONG series to initialize the history. (4) Four answers: `t_train`
+flag; history initialized with the whole training series; next step + direct leads to 64; causal attention.
+(5) "Divide training and validation: generate a long field, duplicate it." Implemented as ONE T=4000 field cut in
+halves (the generator's single RNG draws patterns AND dynamics, so a new seed = a new system) — assumption, to be
+confirmed. (6) "Presentation not understandable; add RMSE; is persistence from the initial condition?" — yes, from
+EACH forecast's own launch state, not from the start of validation; RMSE added and the figure rebuilt around it.
+
+**Measured.**
+- Encoders `hf_enc_seed{0..4}`: S[4000,16]; train-half families 2/5/9 (seeds 0,2,4) or 1/6/9 (1,3).
+- Dev sweep, unseen dev [1750,2000), seeds 0/1, skill h1 / h16 / h64: base (do 0.2, wd 0.1) +0.71/+0.67,
+  +0.49/+0.49, +0.52/+0.54; 1000 steps +0.69/+0.70, +0.41/+0.44, +0.54/+0.55; d32/2L +0.53/+0.53, +0.46/+0.41,
+  +0.54/+0.66; **do 0.4 wd 0.3 +0.74/+0.73, +0.52/+0.53, +0.59/+0.64 -> default.** Seen-data corr at h64 0.96:
+  one trajectory is learnt by heart.
+- Validation, 5 seeds x 1937 forecasts (RMSE in training-std units):
+
+| lead | 1 | 8 | 16 | 32 | 64 |
+|---|---|---|---|---|---|
+| RMSE model (all ch) | 0.10 | 0.50 | 0.57 | 0.67 | 0.71 |
+| RMSE persistence | 0.24 | 0.97 | 0.96 | 1.25 | 1.33 |
+| RMSE climatology | 0.97 | 0.97 | 0.97 | 0.97 | 0.97 |
+| RMSE model cyclic / chaotic | 0.07 / 0.11 | 0.24 / 0.70 | 0.33 / 0.75 | 0.44 / 0.83 | 0.43 / 0.87 |
+| hidden cyclic modes corr (ceiling 0.92) | 0.92 | 0.92 | 0.90 | 0.86 | 0.89 |
+| hidden chaotic modes corr (ceiling 0.94) | 0.93 | 0.51 | 0.41 | 0.17 | 0.12 |
+
+  Causality exact (max diff 0.0). Amplitude 0.99 -> 0.84 (chaotic 0.75 at h64). Early vs late half of validation:
+  identical -> histories longer than any seen in training neither help nor hurt.
+- Reading: persistence is worse than climatology beyond ~8 steps, so "skill vs persistence" flatters long leads.
+  Against climatology at h64 the cyclic channels cut the error by ~57 %, the chaotic ones by only ~10 %. The chaotic
+  modes are lost after ~8-16 steps while the observer holds them at 0.94: the predictor is the limit.
+
+**Open.** Sign-off for D-031 (3-part emulator, long-series history init, train/validation halves) and F-21 (the
+table above + memorization). Next candidates: architecture comparison on this protocol; the chaotic horizon;
+memorization vs a longer training series. Bug fixed: horizon histogram dropped "never" channels.
+

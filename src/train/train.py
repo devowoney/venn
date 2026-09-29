@@ -45,6 +45,10 @@ def main(cfg: DictConfig) -> None:
     field_np, truth = generate_field(gen_cfg, seed=cfg.seed)
     field = torch.from_numpy(field_np).to(device)          # [T,V,H,W]
     T, V, H, W = field.shape
+    # time split (SOP 02, D-030): the observer learns only from the PAST [0, t_fit). null = full record.
+    # The final S is still encoded over all of T, so module 2 can be scored on days never seen here.
+    t_fit = int(cfg.train.t_train) if cfg.train.get("t_train") else T
+    field_fit = field[:t_fit]                              # [t_fit,V,H,W] the only data that trains
     fams = [m["family"] for m in truth["modes"]]
 
     # --- model / optim ----------------------------------------------------------------------
@@ -67,9 +71,9 @@ def main(cfg: DictConfig) -> None:
         masks_init = enc.masks().cpu().numpy()
         # reference energy density: the mean per-cell temporal variance of the field. A channel
         # whose var/count^2 falls below this is reading quieter-than-average cells (D-019).
-        e_ref = field.var(dim=0).mean().clamp_min(1e-12)
-        cell_mean = field.reshape(T, -1).mean(dim=0, keepdim=True)          # [1,N] for L_recon
-        x_ref = ((field.reshape(T, -1) - cell_mean) ** 2).mean()            # field energy scale
+        e_ref = field_fit.var(dim=0).mean().clamp_min(1e-12)
+        cell_mean = field_fit.reshape(t_fit, -1).mean(dim=0, keepdim=True)  # [1,N] for L_recon
+        x_ref = ((field_fit.reshape(t_fit, -1) - cell_mean) ** 2).mean()    # field energy scale
         # geometric footprint ladder: channel 0 gets the largest target, channel K-1 the smallest
         # (matches the multiscale init's sigma ladder, reversed so index order reads big -> small)
         n_cells = float(V * H * W)
@@ -117,9 +121,9 @@ def main(cfg: DictConfig) -> None:
     for step in range(steps):
         enc.temp = _anneal(step, steps, cfg.model.temp0, cfg.model.temp1)
 
-        idx = torch.randint(0, T - 1, (B,), generator=g)   # consecutive-pair starts
-        xb = field[idx]                                    # [B,V,H,W]
-        xb1 = field[idx + 1]                               # [B,V,H,W]
+        idx = torch.randint(0, t_fit - 1, (B,), generator=g)   # consecutive-pair starts
+        xb = field_fit[idx]                                # [B,V,H,W]
+        xb1 = field_fit[idx + 1]                           # [B,V,H,W]
         s_t = enc(xb)                                       # [B,K]
         s_tp1 = enc(xb1)                                    # [B,K]
 
@@ -219,9 +223,9 @@ def main(cfg: DictConfig) -> None:
         # T=2000 x 8192 cells), so we do that and slice `n_win` random windows out of it -- the
         # sampling noise that keeps the updates stochastic (D-011) comes from the window starts.
         if use_spec:
-            S_all = enc(field)                                                # [T,K]
+            S_all = enc(field_fit)                                            # [t_fit,K]
             L = int(sp.win_len)
-            w0 = torch.randint(0, T - L + 1, (int(sp.n_win),), generator=g)   # window starts
+            w0 = torch.randint(0, t_fit - L + 1, (int(sp.n_win),), generator=g)   # window starts
             S_win = torch.stack([S_all[s0:s0 + L] for s0 in w0.tolist()])     # [n_win,L,K]
             # WHICH SHAPE TERM decides cyclic-vs-chaotic (D-027). `structure` speaks the readout's
             # own language (trend+osc vs residual, cut at 0.5) and is the default; `line` is the

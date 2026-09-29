@@ -2108,6 +2108,9 @@ Scored launches: `t = t_tr - 1 ... T - 1 - A` (all targets in the unseen period)
 
 | metric | definition | reads |
 |---|---|---|
+| RMSE | `sqrt(mean (forecast - truth)^2)`, standardized units (1 = one training std) | the error itself, plotted against the two references below |
+| RMSE persistence | forecast `z_{t+a} = z_t`: EACH forecast's own initial condition (launch state) held constant | "nothing changes"; grows with lead, exceeds climatology beyond ~8 steps |
+| RMSE climatology | forecast = training mean (0) | "knows nothing"; ~1 at every lead: the fair long-lead reference |
 | skill | `1 - MSE(model) / MSE(persistence)` | > 0 = better than "nothing changes" |
 | corr | Pearson corr(forecast, truth) over launches | phase / pattern |
 | amplitude | `std(forecast) / std(truth)` over launches | 1 = honest; -> 0 = mean-collapse (F-9) |

@@ -167,6 +167,8 @@ train:
   # per-term with tmp/g.py: |g_slow|=6.7e-6, |g_white|=1.7e-4, |g_energy|=8.8e-4, |g_recon|=5.0e-4.
   # Balance the GRADIENTS, not the loss values -- the values differ by 300x and mislead.
   log_every: 50
+  t_train: null         # SOP 02 time split: observer learns only from [0, t_train). null = full record
+                        # (historical default). 1400 = module-2 protocol (D-030): scored days stay unseen.
 
 # run dir + all artifacts + TensorBoard land under ./.tmps/ (D-014)
 hydra:

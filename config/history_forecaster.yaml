@@ -1,0 +1,35 @@
+# VENN module 2 — HISTORY FORECASTER, the "prefrontal cortex" (SOP 04). Every hyperparameter lives here (D-014).
+#   python -m src.train.train_history_forecaster hf.encoder_run=.tmps/runs/hf_enc_seed0
+defaults:
+  - config              # inherit seed / device from the encoder config
+  - _self_
+
+hf:
+  encoder_run: null     # frozen eye-lobe run dir holding artifacts.npz (required)
+  t_tr: 2000            # training set = [0, t_tr); validation set = [t_tr, T). Must equal the encoder's t_train
+  t_fit: null           # targets used for fitting are < t_fit. null = t_tr (final run).
+                        # t_fit = 1750 -> DEVELOPMENT run: hyperparameters judged on [1750, 2000), never on validation
+  leads: 64             # direct heads psi_{t+1} ... psi_{t+leads}; lead 1 is the primary target
+  # --- model ---
+  d: 64                 # token width
+  layers: 3             # causal attention blocks
+  heads: 4
+  dropout: 0.4          # ONE 2000-step trajectory -> the model memorizes it (seen-data corr 0.96 at lead 64, unseen 0.55).
+                        # Dev sweep, fit [0,1750) judged on [1750,2000), seeds 0/1 (2026-09-29): dropout 0.4 + wd 0.3 beat
+                        # 0.2/0.1 at every lead (h1 +0.74/+0.73 vs +0.71/+0.67, h64 +0.59/+0.64 vs +0.52/+0.54);
+                        # stopping at 1000 steps or d=32/2 layers did not help
+  # --- optimization ---
+  steps: 3000
+  lr: 1.0e-3
+  weight_decay: 0.3     # see dropout
+  grad_clip: 1.0
+  batch: 4              # full-history sequences per step
+  max_start: 500        # each sequence = z[s0 : t_fit], s0 ~ U[0, max_start): varied, always long, histories
+  min_sight: 32         # positions with less history than this are left out of the loss
+  eval_every: 250       # log the development / training-tail loss to TensorBoard
+
+hydra:
+  run:
+    dir: ${hydra:runtime.cwd}/.tmps/runs_hf/${now:%Y%m%d_%H%M%S}
+  job:
+    chdir: true
