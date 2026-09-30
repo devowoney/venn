@@ -26,7 +26,18 @@ hf:
   batch: 4              # full-history sequences per step
   max_start: 500        # each sequence = z[s0 : t_fit], s0 ~ U[0, max_start): varied, always long, histories
   min_sight: 32         # positions with less history than this are left out of the loss
+  input_noise: 0.0      # std (training-std units) of noise added to the history the model READS in training;
+                        # targets stay clean. Anti-memorization knob. 0 = off (F-21 setting)
   eval_every: 250       # log the development / training-tail loss to TensorBoard
+  # --- chaotic channels carry the uncertainty (SOP 04 ensemble section, user 2026-09-29) ---
+  ensemble:
+    enable: false       # false = deterministic model (reproduces F-21). true = noise-driven ensemble head on the
+                        # channels labelled CHAOTIC on the fitting range; stationary/cyclic stay deterministic
+    members: 8          # members per launch during training (fair CRPS is unbiased for any M >= 2)
+    noise_dim: 16       # size of the per-member noise vector eps
+    lambda_crps: 1.0    # weight of the chaotic-channel CRPS against the non-chaotic MSE
+    calibrate: true     # after training, fit a per-lead spread inflation on [t_fit, t_tr) (held-out end of the
+                        # training set; needs t_fit < t_tr, e.g. hf.t_fit=1750). Fixes the overconfidence (SOP 04)
 
 hydra:
   run:

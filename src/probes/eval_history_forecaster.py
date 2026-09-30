@@ -41,11 +41,16 @@ def load_run(run: str, device: str):
     """Rebuild the frozen forecaster + its train-only normalization + the eye-lobe artifacts it was fitted on."""
     ck = torch.load(os.path.join(run, "model.pt"), map_location=device, weights_only=False)
     c = ck["cfg"]
-    model = HistoryForecaster(ck["K"], leads=c["leads"], d=c["d"], layers=c["layers"], heads=c["heads"],
-                              dropout=c["dropout"]).to(device)
-    model.load_state_dict(ck["state"])
-    model.eval()
     nm = np.load(os.path.join(run, "norm.npz"))
+    ens = "chaos" in ck["state"]                                       # ensemble model <=> it holds a chaos mask
+    model = HistoryForecaster(ck["K"], leads=c["leads"], d=c["d"], layers=c["layers"], heads=c["heads"],
+                              dropout=c["dropout"], chaos_mask=nm["chaos"] if ens else None,
+                              noise_dim=int(c["ensemble"]["noise_dim"]) if ens else 16).to(device)
+    state = ck["state"]
+    if ens and "spread" not in state:                                  # runs saved before spread calibration existed
+        state = {**state, "spread": torch.ones(c["leads"])}
+    model.load_state_dict(state)
+    model.eval()
     art = np.load(os.path.join(ck["encoder_run"], "artifacts.npz"))
     return model, nm, art, int(nm["t_tr"])
 
@@ -87,7 +92,21 @@ def horizon(corr_ak: np.ndarray, thr: float = 0.5) -> np.ndarray:
     return np.where(below.any(0), below.argmax(0) + 1, A + 1)
 
 
-def eval_one(run: str, device: str) -> dict:
+def ens_scores(ens: np.ndarray, truth: np.ndarray):
+    """ens [N,M,A,K] members, truth [N,A,K] -> fair CRPS, spread/error ratio, member amplitude, each [A,K]."""
+    M = ens.shape[1]
+    skill = np.abs(ens - truth[:, None]).mean(1)
+    xs = np.sort(ens, axis=1)
+    k = np.arange(1, M + 1, dtype=ens.dtype)[None, :, None, None]
+    crps = (skill - (xs * (2 * k - M - 1)).sum(1) / (M * (M - 1))).mean(0)
+    mean = ens.mean(1)
+    spread = np.sqrt((M + 1) / M * ens.var(1, ddof=1).mean(0))         # finite-ensemble corrected spread
+    rmse_mean = np.sqrt(((mean - truth) ** 2).mean(0))
+    member_amp = ens.std(0).mean(0) / (truth.std(0) + 1e-12)           # std over launches of ONE member
+    return crps, spread / np.maximum(rmse_mean, 1e-12), member_amp
+
+
+def eval_one(run: str, device: str, members: int = 32) -> dict:
     model, nm, art, t_tr = load_run(run, device)
     S = art["S"].astype(np.float64)
     T, K = S.shape
@@ -95,14 +114,26 @@ def eval_one(run: str, device: str) -> dict:
     z = (S - nm["mu"]) / nm["sd"]
     zt = torch.tensor(z, dtype=torch.float32, device=device)
 
-    with torch.no_grad():
-        zhat = model(zt[None, : T - 1])[0].cpu().numpy()          # [T-1,A,K]: forecast made at t from z_0..z_t
-    caus = causality_check(model, zt, t_tr + 100)
-
     # launches: every t whose targets t+1..t+A all fall inside the validation set
     L = np.arange(t_tr - 1, T - A)
     idx = L[:, None] + np.arange(1, A + 1)[None, :]                # [N,A] target times
-    pred, truth = zhat[L], z[idx]                                   # [N,A,K]
+    truth = z[idx]                                                  # [N,A,K]
+    with torch.no_grad():
+        if model.ensemble:
+            torch.manual_seed(0)                                    # reproducible member draws
+            e = model(zt[None, : T - 1], members=members)[0]       # [T-1,M,A,K]
+            ens = e[torch.as_tensor(L, device=e.device)].cpu().numpy()   # [N,M,A,K]
+            zhat = e.mean(1).cpu().numpy()                          # ensemble mean = the best estimate
+            del e
+        else:
+            zhat = model(zt[None, : T - 1])[0].cpu().numpy()       # [T-1,A,K]: forecast made at t from z_0..z_t
+            ens = zhat[L][:, None]                                  # a deterministic model = a 1-member ensemble
+    caus = causality_check(model, zt, t_tr + 100)
+    pred = zhat[L]                                                  # [N,A,K]
+    if ens.shape[1] > 1:
+        crps, ratio, mamp = ens_scores(ens, truth)
+    else:                                                           # CRPS of a point forecast = MAE; no spread
+        crps, ratio, mamp = np.abs(pred - truth).mean(0), np.zeros(pred.shape[1:]), pred.std(0) / (truth.std(0) + 1e-12)
     # PERSISTENCE starts from each forecast's own initial condition: the last observed state z_t at the launch
     # time t, held constant over every lead ("nothing changes from now on"). Its error grows with the lead.
     pers = np.repeat(z[L][:, None, :], A, axis=1)
@@ -132,7 +163,9 @@ def eval_one(run: str, device: str) -> dict:
     mc_ceil = lead_scores(m_ceil, m_true, m_true)[1]
 
     return dict(run=run, t_tr=t_tr, T=T, n_launch=len(L), causality_maxdiff=caus, fams=fams,
-                skill=skill, corr=corr, amp=amp, rmse=rmse, rmse_p=rmse_p, rmse_c=rmse_c, sk_early=sk_early, sk_late=sk_late, hor=horizon(corr),
+                skill=skill, corr=corr, amp=amp, rmse=rmse, rmse_p=rmse_p, rmse_c=rmse_c,
+                crps=crps, ratio=ratio, mamp=mamp, is_ens=bool(model.ensemble), L=L,
+                ens_ex=ens[:, :8] if ens.shape[1] > 1 else None, sk_early=sk_early, sk_late=sk_late, hor=horizon(corr),
                 mode_fam=[f for f, m in zip(mode_fam, moving) if m], mode_corr=mc_pred, mode_ceil=mc_ceil,
                 z=z, zhat=zhat)
 
@@ -147,10 +180,13 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--runs", nargs="+", required=True)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--ref", nargs="*", default=[], help="reference runs (e.g. deterministic F-21 finals), same seeds")
+    ap.add_argument("--members", type=int, default=32, help="ensemble members drawn per launch at evaluation")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
-    R = [eval_one(r, args.device) for r in args.runs]
+    R = [eval_one(r, args.device, args.members) for r in args.runs]
+    Q = [eval_one(r, args.device, args.members) for r in args.ref]
     A = R[0]["skill"].shape[0]
     leads = np.arange(1, A + 1)
     show = [1, 2, 4, 8, 16, 32, 64]
@@ -195,10 +231,29 @@ def main() -> None:
         mc = np.array([r["mode_ceil"][:, [i for i, f in enumerate(r["mode_fam"]) if f == fam]].mean(1) for r in R])
         lines.append(f"  {fam:<9}" + "".join(f" h{a}:{mp[:, a - 1].mean():.2f}/{mc[:, a - 1].mean():.2f}"
                                           for a in show))
+    if Q:
+        lines += ["", "ENSEMBLE vs REFERENCE (same seeds, same launches). mean = ensemble mean; ref = --ref runs.",
+                  "  spread/error ~1 = honest uncertainty; member amp ~1 = each member is a realistic trajectory", ""]
+        lines.append(f"{'':<34}" + "".join(f"  h{a:<5}" for a in show))
+        for fam in FAMS:
+            for key, who, RR in [("rmse", "RMSE model(mean)", R), ("rmse", "RMSE ref", Q),
+                                 ("crps", "CRPS model", R), ("crps", "CRPS ref (=MAE)", Q),
+                                 ("ratio", "spread/error model", R), ("mamp", "member amp model", R),
+                                 ("amp", "amp ref", Q)]:
+                v = np.array([fam_mean(r, key, fam) for r in RR])
+                if np.isnan(v).all():
+                    continue
+                lines.append(f"  {fam + ' ' + who:<32}" + "".join(f"  {np.nanmean(v[:, a - 1]):.3f}" for a in show))
+            lines.append("")
+        for fam in ("cyclic", "chaotic"):
+            sel = lambda r: [i for i, f in enumerate(r["mode_fam"]) if f == fam]
+            mp = np.array([r["mode_corr"][:, sel(r)].mean(1) for r in R]).mean(0)
+            mq = np.array([r["mode_corr"][:, sel(r)].mean(1) for r in Q]).mean(0)
+            lines.append(f"  hidden {fam} modes corr model/ref" + "".join(f" h{a}:{mp[a - 1]:.2f}/{mq[a - 1]:.2f}" for a in show))
     txt = "\n".join(lines)
     print(txt)
     open(os.path.join(args.out, "summary.txt"), "w").write(txt + "\n")
-    json.dump([{k: (v.tolist() if isinstance(v, np.ndarray) else v) for k, v in r.items() if k not in ("z", "zhat")}
+    json.dump([{k: (v.tolist() if isinstance(v, np.ndarray) else v) for k, v in r.items() if k not in ("z", "zhat", "ens_ex", "L")}
                for r in R], open(os.path.join(args.out, "results.json"), "w"))
 
     # ------------------------------ figure ------------------------------------------------------
@@ -277,6 +332,94 @@ def main() -> None:
     fig.suptitle(f"History forecaster — validation set [{r0['t_tr']},{r0['T']}), never seen in training; "
                  f"{len(R)} seeds x {r0['n_launch']} forecasts (band = seed range)", fontsize=13)
     out = os.path.join(args.out, "hf_eval.png")
+    fig.savefig(out, dpi=110, bbox_inches="tight")
+    print(f"[eval] wrote {out}")
+    if Q and R[0]["is_ens"]:
+        ens_figure(R, Q, os.path.join(args.out, "hf_ens.png"))
+
+
+def ens_figure(R: list, Q: list, out: str) -> None:
+    """Ensemble (chaotic channels carry the uncertainty) vs the deterministic reference, same launches."""
+    A = R[0]["rmse"].shape[0]
+    leads = np.arange(1, A + 1)
+    fig = plt.figure(figsize=(16, 14))
+    gs = fig.add_gridspec(3, 3, hspace=0.42, wspace=0.25)
+    # row 1: RMSE of the best estimate per family, ensemble mean vs deterministic reference
+    for j, fam in enumerate(FAMS):
+        ax = fig.add_subplot(gs[0, j])
+        for key, RR, lab, sty in [("rmse", R, "ensemble mean", dict(color=COL[fam], lw=2.2)),
+                                  ("rmse", Q, "deterministic (F-21)", dict(color=COL[fam], lw=1.4, ls="--")),
+                                  ("rmse_p", R, "persistence", dict(color="k", lw=1.2, ls="--")),
+                                  ("rmse_c", R, "climatology", dict(color="0.55", lw=1.2, ls=":"))]:
+            v = np.array([fam_mean(r, key, fam) for r in RR])
+            ax.plot(leads, np.nanmean(v, 0), label=lab, **sty)
+        ax.set_title(f"RMSE of the best estimate — {fam}")
+        ax.set_xlabel("lead (steps ahead)")
+        ax.set_ylabel("RMSE (training std units)")
+        ax.set_xlim(1, A)
+        ax.set_ylim(bottom=0)
+        ax.legend(fontsize=8, loc="upper left")
+    # row 2: chaotic channels -- CRPS, spread/error, amplitude
+    fam = "chaotic"
+    ax = fig.add_subplot(gs[1, 0])
+    for RR, lab, ls in [(R, "ensemble", "-"), (Q, "deterministic (= MAE)", "--")]:
+        ax.plot(leads, np.array([fam_mean(r, "crps", fam) for r in RR]).mean(0), color=COL[fam], ls=ls, lw=2, label=lab)
+    ax.set_title("chaotic channels: CRPS (lower = better)")
+    ax.set_xlabel("lead (steps ahead)")
+    ax.set_xlim(1, A)
+    ax.set_ylim(bottom=0)
+    ax.legend(fontsize=8)
+    ax = fig.add_subplot(gs[1, 1])
+    v = np.array([fam_mean(r, "ratio", fam) for r in R])
+    ax.plot(leads, v.mean(0), color=COL[fam], lw=2)
+    ax.fill_between(leads, v.min(0), v.max(0), color=COL[fam], alpha=0.18)
+    ax.axhline(1, color="k", ls=":", lw=0.8)
+    ax.set_title("chaotic channels: spread / error (1 = honest uncertainty)")
+    ax.set_xlabel("lead (steps ahead)")
+    ax.set_xlim(1, A)
+    ax.set_ylim(bottom=0)
+    ax = fig.add_subplot(gs[1, 2])
+    for RR, key, lab, ls in [(R, "mamp", "one ensemble member", "-"), (R, "amp", "ensemble mean", ":"),
+                             (Q, "amp", "deterministic (F-21)", "--")]:
+        ax.plot(leads, np.array([fam_mean(r, key, fam) for r in RR]).mean(0), color=COL[fam], ls=ls, lw=2, label=lab)
+    ax.axhline(1, color="k", ls=":", lw=0.8)
+    ax.set_title("chaotic channels: amplitude (forecast / true std)")
+    ax.set_xlabel("lead (steps ahead)")
+    ax.set_xlim(1, A)
+    ax.legend(fontsize=8)
+    # row 3: fan charts (seed 0) for a chaotic and a cyclic channel, and the hidden chaotic modes
+    r0, q0 = R[0], Q[0]
+    for j, fam in enumerate(("chaotic", "cyclic")):
+        ax = fig.add_subplot(gs[2, j])
+        k = [i for i, f in enumerate(r0["fams"]) if f == fam][0]
+        t_a = r0["t_tr"] + 300
+        ts = np.arange(t_a - 32, t_a + 3 * 80 + 16)
+        ax.plot(ts, r0["z"][ts, k], color="k", lw=1.1, label="truth")
+        for n_, t0 in enumerate(range(t_a, t_a + 3 * 80, 80)):
+            i0 = int(np.searchsorted(r0["L"], t0))
+            tt = np.arange(t0 + 1, t0 + A + 1)
+            for mm in range(r0["ens_ex"].shape[1]):
+                ax.plot(tt, r0["ens_ex"][i0, mm, :, k], color=COL[fam], lw=0.6, alpha=0.45,
+                        label="ensemble members" if (n_ == 0 and mm == 0) else None)
+            ax.plot(tt, r0["zhat"][t0, :, k], color=COL[fam], lw=2.2, label="ensemble mean" if n_ == 0 else None)
+            ax.plot(tt, q0["zhat"][t0, :, k], color="k", lw=1.1, ls="--", label="deterministic (F-21)" if n_ == 0 else None)
+            ax.plot([t0], [r0["z"][t0, k]], "o", color="k", ms=5, label="initial condition" if n_ == 0 else None)
+        ax.set_title(f"seed 0, channel {k} ({fam}): 8 of the members, three launches", fontsize=10)
+        ax.set_xlabel("time step (validation)")
+        ax.set_ylabel("z (training std units)")
+        ax.legend(fontsize=7, loc="best")
+    ax = fig.add_subplot(gs[2, 2])
+    for RR, lab, ls in [(R, "ensemble mean", "-"), (Q, "deterministic (F-21)", "--")]:
+        v = np.array([r["mode_corr"][:, [i for i, f in enumerate(r["mode_fam"]) if f == "chaotic"]].mean(1) for r in RR])
+        ax.plot(leads, v.mean(0), color=COL["chaotic"], lw=2, ls=ls, label=lab)
+    ax.axhline(0.5, color="k", lw=0.8, ls=":")
+    ax.set_xlim(1, A)
+    ax.set_ylim(0, 1.02)
+    ax.set_xlabel("lead (steps ahead)")
+    ax.set_title("hidden chaotic modes read from the best estimate (corr)")
+    ax.legend(fontsize=8)
+    fig.suptitle(f"Chaotic channels carry the uncertainty — ensemble vs deterministic, validation "
+                 f"[{r0['t_tr']},{r0['T']}), {len(R)} seeds", fontsize=13)
     fig.savefig(out, dpi=110, bbox_inches="tight")
     print(f"[eval] wrote {out}")
 

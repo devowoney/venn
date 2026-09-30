@@ -6,6 +6,25 @@
 
 ## Log
 
+### 2026-09-29 (later) — Chaotic channels carry the uncertainty: ensemble head + spread calibration
+
+- **User:** attention forecaster "not bad, not good"; more precision needed, chaos is the challenge; the chaotic part
+  should take care of the uncertainty. Answers: ensemble of samples; CHAOTIC channels only (stationary/cyclic are
+  reliable if the eye-lobe sees well); precision + uncertainty in one model. (ch0/ch2 same dynamic, different label
+  = an observer matter, not this agent's.)
+- **Built** (SOP 04 in decisions.md first): `hf.ensemble.*` flag (noise-driven head gated by the training-half chaos
+  mask, fair-CRPS loss), `hf.input_noise`, post-training per-lead spread calibration on [1750,2000) (`spread`
+  buffer), eval `--ref` comparison + `hf_ens.png`. Unit checks: sorting CRPS == brute force (1e-7); non-chaotic
+  members identical to the base.
+- **Dev:** raw ensemble overconfident (spread/error 0.29-0.35); history noise 0.1/0.3 barely helps (0.35/0.43) and
+  costs h1 precision; calibration fixes it on a split dev slice (0.76-1.19, CRPS -12..-17 %).
+- **Validation** (`.tmps/eval_hf/final_ens/`, 5 seeds, ref = F-21 finals): chaotic CRPS -24..-36 % (h8 0.37 vs 0.50,
+  h64 0.52 vs 0.68), spread/error 0.90-1.10 at every lead; but ensemble-mean RMSE on chaotic channels NOT better
+  (h64 0.93 vs 0.87) and one member's amplitude 1.35 at h64 (inflation ~4 makes members too wild). Stationary/cyclic
+  unchanged (= ref). Chaos mask flips ch5 on seeds 0/2 between [0,1750) and [0,2000) labels (observer matter).
+- **Open:** memorization of one trajectory is the root cause; proposed next = longer training series. F-22 not
+  recorded yet — awaits sign-off. *(Recorded as F-22 with user sign-off.)*
+
 ### 2026-09-29 — History forecaster (module 2, "prefrontal cortex") built and scored on validation
 
 - **Built** (branch `history-forecastor`, SOP 04 in decisions.md): `src/models/history_forecaster.py` (causal
@@ -1519,4 +1538,27 @@ EACH forecast's own launch state, not from the start of validation; RMSE added a
 **Recorded (user sign-off):** D-031 (3-part emulator, long-series history init, train/validation halves, RMSE
 readout) and F-21 (the table above + memorization). **Open.** Next candidates: architecture comparison on this protocol; the chaotic horizon;
 memorization vs a longer training series. Bug fixed: horizon histogram dropped "never" channels.
+
+#### 2026-09-29 (later) — addendum: chaotic channels carry the uncertainty
+
+User: precision is not enough, chaos is the challenge, "the chaotic part is going to take care of the uncertainty".
+Decided with the user: ensemble of samples, chaotic channels only, one model. Built the noise-driven ensemble head
+(fair CRPS, chaos mask from the fitting range), then found it OVERCONFIDENT on unseen days (dev spread/error ~0.3) —
+the F-21 memorization again: on the one training trajectory the chaotic futures are partly known, so the CRPS loss
+learns a small spread. Tried history noise (0.1, 0.3): little gain, lost lead-1 precision. Per-lead spread
+calibration on the held-out end of the training set fixed the spread size.
+
+Validation, 5 seeds, same launches as F-21 (ensemble fitted on [0,1750), reference on [0,2000)):
+
+| chaotic channels, lead | 1 | 8 | 16 | 64 |
+|---|---|---|---|---|
+| CRPS ensemble / deterministic | 0.054 / 0.084 | 0.374 / 0.502 | 0.431 / 0.567 | 0.516 / 0.679 |
+| spread / error (1 = honest) | 1.07 | 0.90 | 0.95 | 1.10 |
+| RMSE ensemble mean / deterministic | 0.098 / 0.110 | 0.726 / 0.699 | 0.801 / 0.749 | 0.932 / 0.865 |
+| amplitude one member / deterministic | 1.00 / 0.99 | 1.11 / 0.83 | 1.15 / 0.78 | 1.35 / 0.75 |
+
+Reading: the uncertainty is now honest in SIZE and the probabilistic score is much better, but the members are
+not yet realistic trajectories (too wild after the x4 inflation; fan chart shows spikes to -6) and the best
+estimate is not more precise. Both trace to the memorization of one 2000-step trajectory, which calibration
+patches rather than cures. Proposed next: a longer training series (generator `data.T`), same validation length.
 

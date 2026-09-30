@@ -24,6 +24,7 @@ from omegaconf import DictConfig, OmegaConf               # noqa: E402
 from torch.utils.tensorboard import SummaryWriter         # noqa: E402
 
 from src.models.history_forecaster import HistoryForecaster   # noqa: E402
+from src.probes.family import amp_ratio, label_family, series_stats   # noqa: E402
 
 
 def lead_mask(t0: int, T: int, t_fit: int, leads: int, min_sight: int, device) -> torch.Tensor:
@@ -37,16 +38,71 @@ def lead_mask(t0: int, T: int, t_fit: int, leads: int, min_sight: int, device) -
     return (j >= min_sight) & (t0 + j + a < t_fit)
 
 
-def forecast_loss(model: HistoryForecaster, z: torch.Tensor, t0: int, t_fit: int, min_sight: int):
-    """Mean squared forecast error over all valid (position, lead, channel) of one history z [1,T,K]."""
+def fair_crps(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    """Fair (unbiased for finite M) ensemble CRPS, elementwise. x [...,M] members, y [...] truth -> [...].
+
+    CRPS = E|X - y| - E|X - X'|/2. The spread term is computed by SORTING the members:
+    sum_{i<j} |x_j - x_i| = sum_k x_(k) (2k - M - 1), which is O(M log M) instead of O(M^2) and differentiable.
+    """
+    M = x.shape[-1]
+    skill = (x - y[..., None]).abs().mean(-1)
+    xs, _ = torch.sort(x, dim=-1)
+    k = torch.arange(1, M + 1, device=x.device, dtype=x.dtype)
+    spread = (xs * (2 * k - M - 1)).sum(-1) / (M * (M - 1))           # = sum_{i!=j}|xi-xj| / (2M(M-1))
+    return skill - spread
+
+
+def forecast_loss(model: HistoryForecaster, z: torch.Tensor, t0: int, t_fit: int, min_sight: int,
+                  members: int = 0, lambda_crps: float = 1.0, input_noise: float = 0.0):
+    """Loss of one history z [1,T,K] over all valid (position, lead).
+
+    Deterministic model (members = 0): mean squared error on every channel.
+    Ensemble model: MSE of the base forecast on the NON-chaotic channels + lambda_crps x fair CRPS of the members on
+    the CHAOTIC channels (SOP 04) -- the chaotic channels are asked for an honest spread, not for the mean.
+    """
     T, A = z.shape[1], model.A
-    zhat = model(z)                                                    # [1,T,A,K]
+    # history corruption (anti-memorization): the model READS a noisy history but is scored against the clean
+    # future, so it cannot recognize and replay the one training trajectory it has seen (F-21 point 5)
+    z_in = z + input_noise * torch.randn_like(z) if input_noise > 0 else z
     # target of (position j, lead a) = z[j+a]; build it by shifting, padding past the end (masked out anyway)
     pad = torch.cat([z, z[:, -1:].expand(1, A, -1)], dim=1)            # [1,T+A,K]
     tgt = torch.stack([pad[:, a:a + T] for a in range(1, A + 1)], dim=2)   # [1,T,A,K]
-    m = lead_mask(t0, T, t_fit, A, min_sight, z.device)[None, :, :, None].float()
-    err = ((zhat - tgt) ** 2) * m
-    return err.sum() / (m.sum() * z.shape[-1]).clamp_min(1.0)
+    m = lead_mask(t0, T, t_fit, A, min_sight, z.device)[None, :, :, None].float()   # [1,T,A,1]
+    if members == 0:
+        err = ((model(z_in) - tgt) ** 2) * m
+        return err.sum() / (m.sum() * z.shape[-1]).clamp_min(1.0)
+    ens = model(z_in, members=members)                                 # [1,T,M,A,K]
+    c = model.chaos                                                    # [K]
+    base = ens[:, :, 0]                                                # non-chaotic channels: identical members
+    mse = (((base - tgt) ** 2) * m * (1 - c)).sum() / (m.sum() * (1 - c).sum()).clamp_min(1.0)
+    crps = fair_crps(ens.permute(0, 1, 3, 4, 2), tgt)                  # [1,T,A,K]
+    crps = (crps * m * c).sum() / (m.sum() * c.sum()).clamp_min(1.0)
+    return mse + lambda_crps * crps
+
+
+@torch.no_grad()
+def calibrate_spread(model: HistoryForecaster, z_all: torch.Tensor, t_fit: int, t_tr: int, members: int = 32,
+                     grid=np.linspace(1.0, 6.0, 26)) -> np.ndarray:
+    """Per-lead spread inflation s_a on the held-out end of the training set (SOP 04 "spread calibration").
+
+    Launches whose targets lie in [t_fit, t_tr): never used for fitting. For each lead, s_a = the grid value with the
+    lowest fair CRPS over the chaotic channels, widening the members around their own mean.
+    """
+    model.eval()
+    A, c = model.A, model.chaos.bool()
+    model.spread.fill_(1.0)
+    torch.manual_seed(0)
+    ens = model(z_all[None, :t_tr], members=members)[0]               # [t_tr,M,A,K]
+    L = torch.arange(t_fit - 1, t_tr - A, device=z_all.device)
+    e = ens[L][..., c]                                                 # [N,M,A,Kc]
+    idx = L[:, None] + torch.arange(1, A + 1, device=z_all.device)[None, :]
+    y = z_all[idx][..., c]                                             # [N,A,Kc]
+    mu = e.mean(1, keepdim=True)
+    best = np.ones(A)
+    for a in range(A):
+        scores = [float(fair_crps((mu + float(g) * (e - mu))[:, :, a].permute(0, 2, 1), y[:, a]).mean()) for g in grid]
+        best[a] = grid[int(np.argmin(scores))]
+    return best
 
 
 @hydra.main(version_base=None, config_path="../../config", config_name="history_forecaster")
@@ -67,11 +123,23 @@ def main(cfg: DictConfig) -> None:
     mu, sd = S[:t_fit].mean(0), S[:t_fit].std(0) + 1e-8
     z_all = torch.tensor((S - mu) / sd, dtype=torch.float32, device=device)
     z_fit = z_all[:t_fit]                                              # the only data that trains
-    np.savez("norm.npz", mu=mu, sd=sd, t_fit=t_fit, t_tr=t_tr)
     print(f"[hf] encoder={run} S={S.shape} fit=[0,{t_fit}) train=[0,{t_tr}) validation=[{t_tr},{T_all})")
 
+    # chaotic-channel mask for the ensemble head: family labels decided on the FITTING range only
+    ens_cfg = hf.get("ensemble", None)
+    use_ens = bool(ens_cfg is not None and ens_cfg.enable)
+    chaos = np.array([label_family(series_stats((S[:t_fit, i] - mu[i]) / sd[i]), amp_ratio=amp_ratio(S[:t_fit, i]))
+                      == "chaotic" for i in range(K)], dtype=np.float32)
+    members = int(ens_cfg.members) if use_ens else 0
+    lam = float(ens_cfg.lambda_crps) if use_ens else 0.0
+    np.savez("norm.npz", mu=mu, sd=sd, t_fit=t_fit, t_tr=t_tr, chaos=chaos)
+    if use_ens:
+        print(f"[hf] ensemble ON: {int(chaos.sum())} chaotic channels {np.flatnonzero(chaos).tolist()} carry the "
+              f"uncertainty; M={members} members, noise_dim={int(ens_cfg.noise_dim)}")
     model = HistoryForecaster(K, leads=int(hf.leads), d=int(hf.d), layers=int(hf.layers),
-                              heads=int(hf.heads), dropout=float(hf.dropout)).to(device)
+                              heads=int(hf.heads), dropout=float(hf.dropout),
+                              chaos_mask=chaos if use_ens else None,
+                              noise_dim=int(ens_cfg.noise_dim) if use_ens else 16).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=float(hf.lr), weight_decay=float(hf.weight_decay))
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=int(hf.steps))
     writer = SummaryWriter(log_dir="tb")
@@ -83,7 +151,8 @@ def main(cfg: DictConfig) -> None:
         loss = 0.0
         # B long histories z[s0 : t_fit] with random start: varied lengths, all ending at the fit boundary
         for s0 in torch.randint(0, int(hf.max_start), (int(hf.batch),), generator=g).tolist():
-            loss = loss + forecast_loss(model, z_fit[None, s0:], s0, t_fit, int(hf.min_sight))
+            loss = loss + forecast_loss(model, z_fit[None, s0:], s0, t_fit, int(hf.min_sight), members, lam,
+                                        float(hf.get("input_noise", 0.0)))
         loss = loss / int(hf.batch)
         opt.zero_grad()
         loss.backward()
@@ -108,6 +177,13 @@ def main(cfg: DictConfig) -> None:
             writer.add_scalar("train/grad_norm", float(gn), step)
             print(f"  step {step:5d} | loss={float(loss.detach()):.4f} |g|={float(gn):.2f}{msg}")
 
+    if use_ens and bool(ens_cfg.get("calibrate", False)):
+        assert t_fit < t_tr, "spread calibration needs a held-out slice: set hf.t_fit < hf.t_tr"
+        s_a = calibrate_spread(model, z_all, t_fit, t_tr)
+        model.spread.copy_(torch.as_tensor(s_a, dtype=torch.float32))
+        np.save("spread.npy", s_a)
+        print(f"[hf] spread calibrated on [{t_fit},{t_tr}): s(h1)={s_a[0]:.2f} s(h8)={s_a[7]:.2f} "
+              f"s(h16)={s_a[15]:.2f} s(h64)={s_a[-1]:.2f}")
     torch.save(dict(state=model.state_dict(), cfg=OmegaConf.to_container(hf, resolve=True), K=K,
                     encoder_run=run), "model.pt")
     json.dump(dict(final_loss=float(loss.detach()), t_fit=t_fit, t_tr=t_tr), open("metrics.json", "w"), indent=2)

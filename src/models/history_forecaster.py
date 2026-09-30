@@ -67,7 +67,7 @@ class HistoryForecaster(nn.Module):
     """
 
     def __init__(self, K: int, leads: int = 64, d: int = 64, layers: int = 3, heads: int = 4,
-                 dropout: float = 0.2):
+                 dropout: float = 0.2, chaos_mask=None, noise_dim: int = 16):
         super().__init__()
         self.K, self.A = K, leads
         self.inp = nn.Linear(2 * K, d)                                 # token = [state, increment]
@@ -76,13 +76,38 @@ class HistoryForecaster(nn.Module):
         self.head = nn.Linear(d, leads * K)                            # one direct head per lead
         nn.init.zeros_(self.head.weight)                               # start exactly at persistence
         nn.init.zeros_(self.head.bias)
+        # --- ensemble head (SOP 04 "chaotic channels carry the uncertainty"): only built when a chaos mask is
+        # given. It turns (history summary h_t, noise eps) into a member-specific departure from the base
+        # forecast, and the mask zeroes it on every non-chaotic channel, which therefore stay deterministic.
+        self.ensemble = chaos_mask is not None
+        if self.ensemble:
+            self.noise_dim = noise_dim
+            self.register_buffer("chaos", torch.as_tensor(chaos_mask, dtype=torch.float32))   # [K] 1 = chaotic
+            self.gen = nn.Sequential(nn.Linear(d + noise_dim, 2 * d), nn.GELU(), nn.Linear(2 * d, 2 * d),
+                                     nn.GELU(), nn.Linear(2 * d, leads * K))
+            # per-lead spread inflation, fitted AFTER training on held-out data (SOP 04 "spread calibration");
+            # 1 = raw ensemble. Trained on one trajectory, the raw ensemble is overconfident on unseen days.
+            self.register_buffer("spread", torch.ones(leads))
 
-    def forward(self, z: torch.Tensor) -> torch.Tensor:
+    def forward(self, z: torch.Tensor, members: int = 0) -> torch.Tensor:
+        """members = 0: deterministic forecast [B,T,A,K]. members = M > 0 (ensemble model only): M possible
+        futures [B,T,M,A,K]; non-chaotic channels are identical in every member (= the base forecast)."""
         B, T, K = z.shape
         dz = torch.cat([torch.zeros_like(z[:, :1]), z[:, 1:] - z[:, :-1]], dim=1)   # rate of change
         x = self.inp(torch.cat([z, dz], dim=-1))
         pos = torch.arange(T, device=z.device)
         for blk in self.blocks:
             x = blk(x, pos)
-        delta = self.head(self.norm(x)).view(B, T, self.A, K)
-        return z[:, :, None, :] + delta                                # residual: persistence = zero output
+        h = self.norm(x)                                               # [B,T,d] summary of the history at t
+        base = z[:, :, None, :] + self.head(h).view(B, T, self.A, K)   # residual: persistence = zero output
+        if members == 0:
+            return base
+        assert self.ensemble, "members > 0 needs a model built with chaos_mask"
+        # one noise draw per (launch, member), shared by all leads -> each member is a coherent possible future
+        eps = torch.randn(B, T, members, self.noise_dim, device=z.device)
+        hm = h[:, :, None, :].expand(B, T, members, h.shape[-1])
+        dev = self.gen(torch.cat([hm, eps], dim=-1)).view(B, T, members, self.A, K)
+        # calibration: widen the members around their own mean (the best estimate itself is not moved)
+        dm = dev.mean(2, keepdim=True)
+        dev = dm + self.spread[:, None] * (dev - dm)
+        return base[:, :, None] + dev * self.chaos                     # chaos mask: only chaotic channels spread

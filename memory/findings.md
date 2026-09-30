@@ -1087,3 +1087,38 @@ Outputs `.tmps/eval_hf/final/` (`summary.txt`, `results.json`, `hf_eval.png`). R
 6. **A longer history neither helps nor hurts** within validation (early vs late half identical), so histories
    longer than any seen in training (up to 4000 steps vs 2000) are handled by the rotary positions.
 
+
+---
+
+### F-22. Chaotic channels carry the uncertainty: the ensemble is honest in SIZE, not yet in precision or realism (2026-09-29)
+
+Protocol D-031 + SOP 04 ensemble section: `hf.ensemble.enable=true` (noise-driven head on the channels labelled
+chaotic on the fitting range, fair-CRPS loss, M=8), fit `[0,1750)`, per-lead spread calibration on `[1750,2000)`;
+finals `.tmps/runs_hf/final_ens_seed{0..4}`, reference = F-21 deterministic finals (fit `[0,2000)`), same encoders,
+same 1937 validation launches, 32 members at evaluation. Outputs `.tmps/eval_hf/final_ens/` (`summary.txt`,
+`hf_ens.png`, `hf_eval.png`). Chaotic channels, training-std units:
+
+| lead | 1 | 8 | 16 | 64 |
+|---|---|---|---|---|
+| CRPS ensemble / deterministic (= MAE) | **0.054** / 0.084 | **0.374** / 0.502 | **0.431** / 0.567 | **0.516** / 0.679 |
+| spread / error (1 = honest) | 1.07 | 0.90 | 0.95 | 1.10 |
+| RMSE ensemble mean / deterministic | 0.098 / 0.110 | 0.726 / 0.699 | 0.801 / 0.749 | 0.932 / 0.865 |
+| amplitude one member / deterministic | 1.00 / 0.99 | 1.11 / 0.83 | 1.15 / 0.78 | 1.35 / 0.75 |
+| hidden chaotic modes corr, mean / deterministic | 0.93 / 0.93 | 0.48 / 0.51 | 0.37 / 0.41 | 0.10 / 0.12 |
+
+1. **Probabilistic skill: CRPS -24 to -36 %** on the chaotic channels at every lead, with honest spread (0.90-1.10).
+   Stationary and cyclic channels are unchanged vs the reference (RMSE within +-0.02 at every lead): gating the
+   ensemble to the chaotic channels leaves the reliable part deterministic, as intended.
+2. **No gain in precision.** The ensemble mean is as good at h1 and slightly worse at long lead (h64 0.93 vs 0.87,
+   close to climatology 0.95); the hidden chaotic modes are lost at the same ~8-16 steps.
+3. **The raw ensemble is OVERCONFIDENT** (dev spread/error 0.29-0.35): trained on one trajectory, the chaotic futures
+   are partly memorized (F-21 point 5), so the CRPS loss learns a small spread. History noise `hf.input_noise`
+   0.1 / 0.3 barely helped (0.35 / 0.43 at h8) and cost lead-1 precision (chaotic RMSE 0.10 -> 0.13 / 0.25).
+4. **Calibration fixes the size, not the cause.** Needed inflation 1.6-1.8 at h1 rising to 3.4-4.4 at h64 (5 seeds);
+   after it, single members over-shoot (amplitude 1.35 at h64; excursions to -6 where the truth stays within +-2),
+   so members are not yet realistic trajectories.
+5. **Label instability of the chaos mask** (observer side, not this module): ch5 is chaotic on `[0,1750)` but cyclic
+   on `[0,2000)` for seeds 0 and 2 -> a gated ensemble inherits the labeller's boundary cases (cf. the user's ch0/ch2
+   remark). The cyclic rows' non-zero spread/error (0.10-0.17) comes from this channel.
+6. Root cause of 2-4: memorization of ONE 2000-step training trajectory. Candidate remedy (not run): a longer
+   training series, same validation length.

@@ -2152,3 +2152,48 @@ forecast; ceiling = the same readout on the TRUE future state (what a perfect fo
 2. lead-1 skill > 0 on the unseen period, on every seed;
 3. amplitude near 1 (no mean-collapse) — rank by amplitude first (F-9);
 4. figure checked with the user: forecast vs truth per family + skill/corr/amplitude vs lead.
+
+### Chaotic channels carry the uncertainty: ensemble head (feature flag `hf.ensemble.enable`, user 2026-09-29)
+
+Why: a point forecast trained on MSE converges to the conditional MEAN. For a chaotic channel that mean decays toward
+climatology after a few steps (F-21: chaotic amplitude 0.75 at h64, RMSE 0.87 vs climatology 0.95) — one line cannot
+be precise past ~1 Lyapunov time. User rulings: the uncertainty takes the form of an ENSEMBLE OF SAMPLES; it is
+allowed on the CHAOTIC channels only ("if the eye-lobe is seeing well, stationary and cyclic dynamics have a high
+reliability"); precision and uncertainty come from ONE model.
+
+```
+h_t = causal-attention(z_0..z_t)                          (shared, as before)
+base_{t+a} = z_t + head_a(h_t)                            [A,K]   deterministic, every channel
+eps_m ~ N(0, I_noise_dim), m = 1..M                       one draw per member per launch (shared over leads)
+member_m = base + c * g(h_t, eps_m)                       [M,A,K] c_k = 1 if channel k is chaotic, else 0
+```
+
+- `c` = family labels of the TRAINING half (`src/probes/family.py`, same rule as the probe), saved with the run so
+  training and evaluation use the same mask. Stationary / cyclic channels: all members identical = the base forecast.
+- One eps per member per launch -> a member is a coherent 64-step possible future, not independent noise per lead.
+- Loss: MSE of `base` on the non-chaotic channels + `lambda_crps` x fair ensemble CRPS on the chaotic channels
+  (`mean_i |x_i - y| - sum_{i!=j} |x_i - x_j| / (2M(M-1))`, unbiased for finite M), same (position, lead) mask.
+- `hf.ensemble.enable: false` (default) reproduces F-21 exactly.
+
+Evaluation adds, on the same launches as F-21 (baseline = the F-21 deterministic finals):
+| metric | definition | good |
+|---|---|---|
+| RMSE of ensemble mean | as RMSE, forecast = member mean | <= deterministic model |
+| CRPS | fair ensemble CRPS (deterministic model: = MAE) | lower |
+| spread / error | `sqrt((M+1)/M) * member std` over RMSE of the mean | ~ 1 = honest uncertainty |
+| member amplitude | std over launches of ONE member / true std | ~ 1 = members are realistic, no mean-collapse |
+
+#### Spread calibration on the held-out end of the training set (`hf.ensemble.calibrate`, 2026-09-29)
+
+Why: trained on ONE trajectory, the ensemble learns the chaotic futures partly by heart, so on unseen days it is
+OVERCONFIDENT (dev slice: spread/error 0.29-0.35 instead of ~1). History noise (`hf.input_noise` 0.1 / 0.3) barely
+helped (0.35 / 0.43) and cost lead-1 precision (chaotic RMSE 0.10 -> 0.13 / 0.25). A per-lead inflation fitted on
+held-out data fixes the spread: fitted on dev half 1, scored on dev half 2, spread/error 0.76-1.19, chaotic CRPS
+-12 to -17 %, inflation 1.7 (h1) -> 3.6 (h64).
+
+- Protocol: fit on `[0, t_fit=1750)`; after training, choose `s_a` per lead (grid 1..6, minimum fair CRPS over the
+  chaotic channels, 32 members) on launches whose targets lie in `[t_fit, t_tr)` = `[1750, 2000)`; store it in the
+  model buffer `spread [A]`. Validation `[2000, 4000)` is untouched.
+- Applied inside the model around the ensemble mean: `dev' = mean_m(dev) + s_a (dev - mean_m(dev))`. The mean — and
+  so the RMSE of the best estimate — is unchanged; only the spread is corrected. Requires `t_fit < t_tr`.
+- Cost: the ensemble model is fitted on 1750 steps, its deterministic reference (F-21) on 2000.
