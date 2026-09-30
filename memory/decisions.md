@@ -865,6 +865,31 @@ Currently t_tr = 1400, T = 2000 (the existing split).
   initial condition held constant) and climatology (training mean) — plus corr, amplitude, hidden-mode readout.
   Persistence alone is not enough: beyond ~8 steps it is worse than climatology (F-21).
 
+## D-032 — Observer (eye-lobe) track: North Star, protocol, and the reconstruction score R² / noise ceiling
+
+**Date:** 2026-09-30. **Source:** user rulings in the `feature-observer` session (progress.md 2026-09-30). Evidence:
+F-24, F-25. Full derivation of the score: `memory/reconstruction_score.md`.
+
+- **Branch.** Observer work lives on `feature-observer` (worktree `.claude/worktrees/feature-observer`, branched from
+  `history-forecastor` @ `7815f61`), never on `history-forecastor` (user: "the correction with this agent should be in
+  another branch"). The old `stationary-observer` branch was deleted locally (tree identical to main `868f8eb`).
+- **North Star (observer).** "A stable observer (over training time) that makes sufficient meaningful signal to
+  reconstruct the original states." Hypothesis under test: long enough data → stable activated pixels capturing the
+  three families.
+- **Protocol.** Training `[0,8000)`, validation `[8000,10000)` of one `T=10000` field; `train.max_steps=8000`
+  (user: "to see whole dynamic"); comparison arm training `[0,2000)` on the same field.
+- **Stability measure.** Feature flag `train.snap_every` (default 0 = off, artifacts unchanged): masks saved every N
+  steps (`masks_snap`, `snap_steps`, plus `t_fit`). "Activated pixel" = mask > 0.5; scored as IoU vs the previous
+  snapshot (is it still moving?) and vs the final mask (how far has it travelled?).
+- **Reconstruction score = R² / noise ceiling** (user: "yes, plot R²/ceiling"). R² = balanced (per-cell
+  standardized), decoder fitted on the training slice, scored on validation. Ceiling C = mean_c(1 − σ²/Var(y_c)),
+  σ = `data.obs_noise`. R² = C × R²_state, so R²/C = the fraction of the recoverable state reconstructed; raw R² is
+  NOT comparable across seeds (C = 0.49-0.88 from the pattern layout alone).
+- **Known limit, recorded with the decision:** on the M=10 testbed (14 independent signals) any K ≥ 14 readings reach
+  R²/C ≈ 1, so the score cannot rank observers there; it discriminates only when K < 2(M−1) − 4 (F-25).
+- **Open, not decided:** (a) harder testbed (e.g. M=40, 74 signals) with K sized to it; (b) the family ladder at
+  many modes (0 stationary channels at M=40); (c) a longer budget + stop rule for "stable".
+
 ## Numbering collisions with the encoder track
 
 The module-2 (`latent-predictor`) branch and the parallel `stationary-observer` (encoder) session both

@@ -32,6 +32,39 @@
   live family label / amp_r / IoU; state: x(t) over [8000,8600) with final footprints + 16 traces and a cursor).
   Seen in the frames: the two flat rungs read SCATTERED pixels (speckle over ~2400 cells) — flat by cancellation,
   not by locking onto the static pattern; at step 251 they still read cyclic, obey by step 8000 (16/16).
+- **User:** "eye already saturated with 2000 data? improve reconstruction first, more R^2 — maybe more channels?"
+  Probe `.tmps/k_sweep/k_sweep.py` (-> `k_sweep.json`): val [8000,10000) balanced recon R^2 vs K, PCA-K bound (best any
+  K linear features can do) and untrained multiscale masks, plus the noise ceiling 1 - obs_noise^2/var(cell).
+  | seed | noise ceiling | PCA-16 | PCA-64 | masks K=8 | K=16 | K=64 |
+  | 0 | 0.821 | 0.817 | 0.822 | 0.750 | 0.816 | 0.816 |  (seeds 1-4 same picture: 0.738/0.879/0.491/0.820 ceilings,
+  K=16 masks within 0.001-0.008 of them). K=16 ALREADY sits at the noise ceiling; the missing R^2 is the 0.05 iid noise
+  in quiet cells (balanced R^2 weights them equally; seed 3 is half noise). More channels cannot help here; only K=8
+  loses signal. This is also why training never moved R^2. The testbed has 14 independent signals (verified rank, see below), too few to stress K.
+- **User:** "test whether we need more eyes (kernels) if we have more modes at the same spatial resolution."
+  Probe `.tmps/k_sweep/mode_sweep.py` (-> json, `mode_sweep.png`): M = 10/20/40/80 modes (split 1/3/6; M>10 gets
+  distinct cyclic periods geomspace(30,400)), K = 8..128, 5 seeds, val R^2 / noise ceiling. Untrained masks, mean:
+  | M | K8 | K16 | K32 | K64 | K128 |   M10: .92 .99 .99 .99 .99 | M20: .67 .90 1.00 1.00 1.00 |
+  M40: .46 .72 .90 1.00 1.00 | M80: .33 .57 .80 .95 1.00. PCA-K bound is ~0.1-0.2 higher at small K, same knee.
+  -> YES: eyes needed scale with modes; ceiling reached once K ~ the number of independent signals
+  = 2(M-1) - 4 (SSH amp + SST AR1-filtered amp per fluctuating mode; constant mode 0; 2+2 private modes count once).
+  Verified: exact rank of the noise-free field (obs_noise=0) = 14/34/74/154 for M=10/20/40/80
+  (`.tmps/k_sweep/signal_rank.py`). (An earlier "~18 DOF" / "K ~ 1.6 M" statement was a miscount — superseded.)
+  Trained check (`.tmps/runs/m40_K{16,32,64}_seed{0..2}`, `score_trained.py`): R^2/ceil trained vs init K16 .76 vs .71,
+  K32 .93 vs .90, K64 .996 vs .998 -> once K < DOF, TRAINING NOW HELPS reconstruction (it did not at M=10).
+  But the family ladder breaks at M=40: 0 stationary channels on every run (flat rungs fail), cyclic 3-15 vs the
+  ladder's ~5/10/20, obedience 0.72-0.83.
+- **User:** "untrained eyes can't make such R^2" → control `dumb_eyes.py`: white-noise masks 0.97, 16 random pixels
+  0.73-0.94 of the ceiling (the DECODER is fitted; K ≥ number of signals decodes everything). "Why 18?" → recount:
+  D = 2(M−1) − 4 = 14 (constant mode 0, private modes once), verified exact rank 14/34/74/154 (`signal_rank.py`).
+  "Why 0.75 with 16 eyes?" → per-cell maps (`cell_maps.png`): lost R² = quiet cells (pure noise), eye R² map vs
+  ceiling map corr 0.999; seed 3 patterns sit in the bottom half.
+- **Probe change (user: "plot R²/ceiling"):** `observer_stability.py` now stores `noise_ceiling` per run and
+  `r2_val_norm` = R²/C per snapshot; right panel of `stability.png` plots R²/C (0.97-1.00 from step 1 to 8000, all
+  seeds); misleading "settle" column removed.
+- **Recorded (user: "record it as markdown, update memory"):** standalone `memory/reconstruction_score.md`
+  (derivation R² = C × R²_state), F-24, F-25, D-032, measurements "Observer track 2026-09-30", task_plan status.
+- **Pending user decision:** harder testbed (M=40, K sized) / family ladder at many modes / longer budget + stop rule.
+  Nothing committed (user handles git); all edits uncommitted on `feature-observer`.
 
 ### 2026-09-30 — Long-series variant: training [0,8000), validation [8000,10000)
 

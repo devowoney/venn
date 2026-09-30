@@ -71,6 +71,10 @@ def score_run(run: str, t_val: int, device: str) -> dict:
     field = torch.from_numpy(field_np).to(device)                      # [T,V,H,W]
     Y = field.reshape(T, -1).double()                                  # [T,N]
     snaps = art["masks_snap"].astype(np.float32)                       # [n,K,V,H,W]
+    # noise ceiling: the best balanced R^2 ANY observer can reach, because the generator's iid obs noise is
+    # unpredictable. Per cell: 1 - noise_var / cell_var, averaged over cells like the balanced R^2 itself.
+    # Raw R^2 differs by seed mostly through how much of the grid is signal-free; R^2 / ceiling does not.
+    ceiling = float((1.0 - float(cfg.data.obs_noise) ** 2 / Y[:t_fit].var(0)).mean())
     on = snaps > 0.5                                                   # activated pixels
     rows = []
     for j, m in enumerate(snaps):
@@ -82,8 +86,9 @@ def score_run(run: str, t_val: int, device: str) -> dict:
                          iou_prev=float(iou(on[j], on[j - 1]).mean()) if j else float("nan"),
                          iou_final_min=float(iou(on[j], on[-1]).min()),
                          active=float(on[j].sum() / on[j].shape[0]),  # mean activated pixels per channel
-                         r2_train=r2_tr, r2_val=r2_va))
-    return dict(run=os.path.relpath(run), seed=int(cfg.seed), t_fit=t_fit, t_val=t_val, T=T, curve=rows)
+                         r2_train=r2_tr, r2_val=r2_va, r2_val_norm=r2_va / ceiling))
+    return dict(run=os.path.relpath(run), seed=int(cfg.seed), t_fit=t_fit, t_val=t_val, T=T,
+                noise_ceiling=ceiling, curve=rows)
 
 
 def main() -> None:
@@ -104,7 +109,7 @@ def main() -> None:
     cols = dict(zip(arms, ["#4C72B0", "#DD8452", "#55A868", "#C44E52"]))
     panels = [("iou_final", "IoU of activated pixels vs FINAL mask"),
               ("iou_prev", "IoU vs previous snapshot (250 steps earlier)"),
-              ("r2_val", f"field recon R$^2$ on validation [{args.t_val},T) (balanced)")]
+              ("r2_val_norm", f"recon R$^2$ / noise ceiling on validation [{args.t_val},T)")]
     fig, axs = plt.subplots(1, 3, figsize=(16, 4.4))
     for ax, (key, title) in zip(axs, panels):
         for t in arms:
@@ -118,19 +123,21 @@ def main() -> None:
         ax.set_xlabel("optimizer step")
         ax.grid(alpha=0.3)
     axs[0].legend(fontsize=9)
+    axs[2].axhline(1.0, color="#52514e", lw=0.8, ls=":")                # 1 = everything recoverable captured
+    axs[2].set_ylim(0.9, 1.01)
     fig.suptitle("Eye-lobe stability and sufficiency vs training length (same T=10000 system per seed)")
     fig.tight_layout()
     fig.savefig(os.path.join(args.out, "stability.png"), dpi=130)
 
-    # --- console summary: the last snapshot and the step where the eye settled --------------------
-    print(f"{'run':>34} {'iou_final@50%':>13} {'iou_prev@end':>12} {'settle':>7} {'R2 tr':>6} {'R2 val':>6}")
+    # --- console summary at the last snapshot. (A "settle step" vs the FINAL mask was dropped: IoU vs final
+    # reaches 1 by construction, so it reports when training stopped, not when the eye stopped moving.)
+    print(f"{'run':>34} {'iou_final@50%':>13} {'iou_prev@end':>12} {'R2 tr':>6} {'R2 val':>6} {'ceil':>6} "
+          f"{'R2/ceil':>7}")
     for r in res:
         c = r["curve"]
         mid = c[len(c) // 2]["iou_final"]
-        # settle = first step after which the eye never drops below 0.9 IoU vs its final state
-        settle = next((c[i]["step"] for i in range(len(c)) if all(d["iou_final"] >= 0.9 for d in c[i:])), None)
-        print(f"{r['run']:>34} {mid:13.3f} {c[-1]['iou_prev']:12.3f} {str(settle):>7} "
-              f"{c[-1]['r2_train']:6.3f} {c[-1]['r2_val']:6.3f}")
+        print(f"{r['run']:>34} {mid:13.3f} {c[-1]['iou_prev']:12.3f} {c[-1]['r2_train']:6.3f} "
+              f"{c[-1]['r2_val']:6.3f} {r['noise_ceiling']:6.3f} {c[-1]['r2_val_norm']:7.3f}")
     print(f"[stability] wrote {args.out}/stability.json + stability.png")
 
 

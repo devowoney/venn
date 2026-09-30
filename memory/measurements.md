@@ -165,3 +165,82 @@ Stationary-rung amp_ratio (ch0, ch1), 0.95 → 0.98: s0 0.053, 0.028 → 0.040, 
 0.042, 0.038. Every rung flatter; the two remaining misses sit at 0.050 / 0.051. No rung reaches the
 target's 0.02 — the hinge stays active, so flatness is limited by what the masks can align with,
 not by the push.
+
+## Observer track 2026-09-30 (`feature-observer`, F-24 / F-25 / D-032)
+
+All: one `T=10000` field per seed, training `[0,8000)` unless stated, validation `[8000,10000)`, K=16, M=10 testbed.
+Score: balanced R² fitted on training, scored on validation; C = noise ceiling (`memory/reconstruction_score.md`).
+
+### Stability vs training length (`obs_t{2000,8000}_seed*`, `max_steps=8000`, last snapshot)
+
+| arm | seed | IoU vs final @ step 4000 | IoU vs previous (end) | R² val | C | R²/C | slow-rung amp_ratio | obedience |
+|---|---|---|---|---|---|---|---|---|
+| [0,2000) | 0 | 0.855 | 0.983 | 0.814 | 0.822 | 0.991 | 0.023 / 0.033 | 1.00 |
+| [0,2000) | 1 | 0.864 | 0.986 | 0.725 | 0.740 | 0.980 | 0.026 / 0.054 | 0.94 |
+| [0,2000) | 2 | 0.798 | 0.988 | 0.877 | 0.880 | 0.996 | 0.032 / 0.044 | 1.00 |
+| [0,2000) | 3 | 0.794 | 0.986 | 0.476 | 0.492 | 0.968 | 0.041 / 0.041 | 1.00 |
+| [0,2000) | 4 | 0.787 | 0.983 | 0.818 | 0.821 | 0.997 | 0.044 / 0.045 | 1.00 |
+| [0,8000) | 0 | 0.816 | 0.983 | 0.816 | 0.821 | 0.994 | 0.046 / 0.039 | 1.00 |
+| [0,8000) | 1 | 0.852 | 0.989 | 0.731 | 0.738 | 0.991 | 0.046 / 0.056 | 0.94 |
+| [0,8000) | 2 | 0.769 | 0.987 | 0.879 | 0.879 | 0.999 | 0.047 / 0.034 | 1.00 |
+| [0,8000) | 3 | 0.829 | 0.984 | 0.483 | 0.491 | 0.983 | 0.051 / 0.049 | 0.94 |
+| [0,8000) | 4 | 0.742 | 0.986 | 0.821 | 0.820 | 1.000 | 0.050 / 0.048 | 1.00 |
+
+IoU vs final at step 1: 0.05-0.06 on every run; R² at step 1 equals R² at step 8000 within 0.001.
+Earlier 5000-step encoders (`hf10k_enc_seed*`, [0,8000)): slow-rung amp_ratio 0.048/0.044, 0.046/0.055, 0.046/0.035,
+0.051/0.052, 0.055/0.051 → 6/10 flat. `hf_enc_seed*` (T=4000, [0,2000)): 9/10 flat.
+
+### Noise ceiling per seed (M=10, training slice)
+
+| seed | C | median cell C_c | cells with signal < noise | cells C_c > 0.95 |
+|---|---|---|---|---|
+| 0 | 0.821 | 0.97 | 15% | 57% |
+| 1 | 0.738 | 0.95 | 23% | 49% |
+| 2 | 0.879 | 0.98 | 9% | 65% |
+| 3 | 0.491 | 0.48 | 50% | 36% |
+| 4 | 0.820 | 0.97 | 15% | 56% |
+
+### Meaningless eyes reach the ceiling (M=10, K=16, R²/C) — `dumb_eyes.py`
+
+| seed | multiscale init | white-noise 0/1 masks | 1 random pixel each |
+|---|---|---|---|
+| 0 | 0.994 | 0.974 | 0.851 |
+| 1 | 0.989 | 0.977 | 0.875 |
+| 2 | 0.999 | 0.977 | 0.928 |
+| 3 | 0.983 | 0.966 | 0.732 |
+| 4 | 1.000 | 0.977 | 0.938 |
+
+### Independent signals D = 2(M−1) − 4 — exact rank of the noise-free field (`signal_rank.py`, seed 0)
+
+| M | 10 | 20 | 40 | 80 |
+|---|---|---|---|---|
+| predicted D | 14 | 34 | 74 | 154 |
+| exact rank | 14 | 34 | 74 | 154 |
+| directions above one noise direction's energy | 13 | 33 | 67 | 138 |
+
+### Modes × eyes (`mode_sweep.py`, R²/C, mean ± std over 5 seeds; M>10 cyclic periods geomspace(30,400))
+
+| M | kind | K=8 | K=16 | K=32 | K=64 | K=128 |
+|---|---|---|---|---|---|---|
+| 10 | untrained masks | 0.917±0.009 | 0.993±0.006 | 0.994±0.006 | 0.994±0.006 | 0.994±0.006 |
+| 10 | PCA-K bound | 0.968±0.012 | 0.994±0.006 | 0.997±0.006 | 1.002±0.004 | 1.012±0.002 |
+| 20 | untrained masks | 0.668±0.064 | 0.895±0.010 | 0.997±0.001 | 1.000±0.000 | 1.000±0.000 |
+| 20 | PCA-K bound | 0.848±0.018 | 0.957±0.008 | 1.000±0.000 | 1.003±0.001 | 1.007±0.003 |
+| 40 | untrained masks | 0.457±0.056 | 0.716±0.038 | 0.902±0.010 | 0.997±0.000 | 1.000±0.000 |
+| 40 | PCA-K bound | 0.675±0.033 | 0.856±0.011 | 0.961±0.003 | 1.000±0.000 | 1.001±0.001 |
+| 80 | untrained masks | 0.334±0.030 | 0.565±0.013 | 0.796±0.011 | 0.945±0.001 | 0.998±0.000 |
+| 80 | PCA-K bound | 0.552±0.015 | 0.747±0.010 | 0.899±0.003 | 0.974±0.001 | 1.000±0.000 |
+
+### Trained eyes at M=40 (`m40_K{16,32,64}_seed{0..2}`, `score_trained.py`)
+
+| K | seed | R²/C trained | R²/C own init | obedience | population stat/cyc/chaotic |
+|---|---|---|---|---|---|
+| 16 | 0 | 0.769 | 0.674 | 0.75 | 0/3/13 |
+| 16 | 1 | 0.783 | 0.767 | 0.75 | 0/3/13 |
+| 16 | 2 | 0.734 | 0.675 | 0.75 | 0/4/12 |
+| 32 | 0 | 0.939 | 0.886 | 0.81 | 0/7/25 |
+| 32 | 1 | 0.939 | 0.909 | 0.72 | 0/4/28 |
+| 32 | 2 | 0.921 | 0.911 | 0.81 | 0/7/25 |
+| 64 | 0 | 0.997 | 0.998 | 0.83 | 0/15/49 |
+| 64 | 1 | 0.996 | 0.997 | 0.78 | 0/12/52 |
+| 64 | 2 | 0.996 | 0.998 | 0.75 | 0/10/54 |

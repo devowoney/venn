@@ -6,6 +6,15 @@
 
 ## Status
 
+- **Observer track (2026-09-30, branch `feature-observer`, D-032):** North Star = a stable eye (over training time)
+  with sufficient signal to reconstruct the state. Measured (F-24/F-25): eye still drifts at 8000 steps, no gain from
+  8000 vs 2000 training steps; reconstruction already at the noise ceiling (R²/C 0.97-1.00) because the M=10 testbed
+  has only 14 independent signals for K=16 eyes. Score definition: `memory/reconstruction_score.md`.
+  - [ ] User decision: harder testbed (e.g. M=40 → 74 signals, K sized to it) so reconstruction can rank observers
+  - [ ] Family ladder at many modes (0 stationary channels at M=40)
+  - [ ] Longer budget + stop rule for "stable" (e.g. < 0.5% active pixels change per 1000 steps)
+- *(Entries below predate the observer / history-forecaster tracks; kept as recorded.)*
+
 - **Current phase:** Phase L done → early Phase S (STYLIZE). The v0 encoder trains stably and
   produces real structure, but two structural limits (decisions **D-018**) BLOCK the next design
   step and need a user call. See progress.md 2026-08-26 and findings F-1…F-5.

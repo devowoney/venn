@@ -1155,3 +1155,49 @@ Ensemble model, RMSE of the best estimate in training-std units (2000-step train
    ensemble-vs-twin comparison is clean). Hyperparameters were tuned for 2000 training steps; less regularization may
    now be better (untested). Observer side: on `[0,8000)` the slow rungs are no longer reliably flat (families 2/5/9,
    1/5/10, 2/4/10, 0/5/11, 0/6/10 for seeds 0-4), so the chaos mask covers 9-11 channels.
+
+---
+
+### F-24. Eye-lobe vs training length (2000 vs 8000): no difference; the eye still drifts at 8000 steps (2026-09-30)
+
+Branch `feature-observer`. Protocol: one `T=10000` field per seed, validation `[8000,10000)`; eye-lobe trained on
+`[0,2000)` vs `[0,8000)`, `train.max_steps=8000` both, masks snapshotted every 250 steps (`train.snap_every=250`).
+Runs `.tmps/runs/obs_t{2000,8000}_seed{0..4}`; probe `src/probes/observer_stability.py`; figure
+`.tmps/observer_stability/stability.png`; GIFs `src/probes/plots_observer.py` → `.tmps/observer_viz/`.
+
+1. **Stability identical for both lengths.** IoU of activated pixels (mask > 0.5) vs the final mask rises ~linearly to
+   step 8000 (no plateau); step-to-step IoU 0.983-0.989 at the end → ~1.5% of active pixels still flip per 250 steps.
+   User hypothesis "long enough data → stable eye" NOT supported at this budget.
+2. **Families:** `[0,2000)` 9/10 slow rungs flat, obedience 1.00 ×4 / 0.94 ×1; `[0,8000)` 8/10 flat, 1.00 ×3 / 0.94 ×2;
+   8000-arm flat rungs at amp_ratio 0.034-0.056 (cut 0.05). `max_steps` 5000 → 8000 lifted the 8000 arm from 6/10 to
+   8/10 flat (vs `hf10k_enc_seed*`). Flatness fails on the training slice too (train ≈ val within 0.005): an
+   optimization/balance issue, not generalization. `L_level` plateaus at 7e-4-9e-4 (r ≈ 0.955 vs target 0.98).
+3. **Flat rungs read SCATTERED pixels** (speckle over ~2400 cells, GIF): flat by cancellation, not by locking onto the
+   static pattern — why they park at the 0.05 cut.
+4. **Reconstruction R² flat from step 1** and equal across lengths → see F-25 (it cannot discriminate here).
+5. Correction to F-23's observer note: "2/5/9" IS the K=16 ladder target (2 slow / 5 cyclic / 9 fast); seeds 0 and 2
+   of `hf10k_enc` were fully obedient; seeds 1/3/4 lost 1-2 flat rungs.
+
+---
+
+### F-25. Reconstruction R² is at the noise ceiling in the current testbed; eyes needed = number of independent signals (2026-09-30)
+
+Full derivation: `memory/reconstruction_score.md`. Probes `.tmps/k_sweep/{k_sweep,cell_ceiling,mode_sweep,dumb_eyes,
+signal_rank,cell_maps,score_trained}.py`; figures `.tmps/k_sweep/{mode_sweep,cell_maps}.png`.
+
+1. **R² = C × R²_state**, C = mean_c (1 − σ²/Var(y_c)) (σ = obs_noise = 0.05). Raw balanced R² 0.48-0.88 by seed is the
+   ceiling C (0.491-0.879), set by how much of the grid is signal-free (9-50% of cells have signal < noise; seed 3's
+   patterns sit in the bottom half). Eye R²/C = 0.98-1.00 on every seed; per-cell eye-R² map vs ceiling map corr 0.999.
+2. **Why untrained eyes score at the ceiling:** the field carries D = 2(M−1) − 4 independent time signals (SSH amp +
+   SST AR1 response per fluctuating mode; constant mode 0; private modes once) — exact rank of the noise-free field
+   14/34/74/154 for M = 10/20/40/80. K = 16 ≥ 14, so any 16 generic linear readings decode everything: white-noise
+   masks 0.97, 16 single random pixels 0.73-0.94, init masks 0.98-1.00; R² flat over training (`stability.png`).
+   (An earlier in-session "~18 DOF" / "K ≈ 1.6 M" was a miscount — superseded.)
+3. **More modes → more eyes** (untrained masks, R²/C, 5 seeds): M10 K16 0.99 | M20 K16 0.90, K32 1.00 |
+   M40 K16 0.72, K32 0.90, K64 1.00 | M80 K16 0.57, K64 0.95, K128 1.00. Knee at K ≈ D (the weakest directions carry
+   < 0.3%). Selection masks trail the PCA-K bound by 0.1-0.2 when K < D.
+4. **Trained eyes (M=40, K=16/32/64, 3 seeds):** R²/C 0.76 / 0.93 / 0.996 vs their own init 0.71 / 0.90 / 0.998 →
+   training helps reconstruction only when K < D. But the ladder breaks at M=40: **0 stationary channels** on every
+   run, cyclic 3-15 (fewer than assigned), obedience 0.72-0.83.
+5. Consequence: R²/C tests sufficiency only when eyes are scarce (K < D); it never tests meaningfulness (families,
+   stability). The M=10 testbed cannot rank observers by reconstruction.
