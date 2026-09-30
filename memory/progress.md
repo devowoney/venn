@@ -6,6 +6,33 @@
 
 ## Log
 
+### 2026-09-30 (later) — Eye-lobe stability vs training length (2000 vs 8000), max_steps 8000
+
+- **User (North Star):** find an observer that is STABLE over training time and makes sufficient meaningful signal to
+  reconstruct the original states. Hypothesis: long enough data -> stable activated pixels capturing the 3 families.
+  Stay on train [0,8000) / val [8000,10000); max_steps 8000; compare 2000 vs 10000.
+- **Code (feature flag, default off):** `train.snap_every` saves masks every N steps (`masks_snap`, `snap_steps`, plus
+  `t_fit`) in artifacts.npz; probe `src/probes/observer_stability.py` (binarized-mask IoU vs final / vs previous
+  snapshot; balanced field-recon R^2 fitted on [0,t_fit), scored on [8000,T)).
+- **Runs:** `.tmps/runs/obs_t{2000,8000}_seed{0..4}` — same T=10000 field per seed, train [0,2000) vs [0,8000),
+  max_steps 8000, snap_every 250. Figure `.tmps/observer_stability/stability.png`.
+- **Result:**
+  1. Stability: identical for both lengths. IoU vs final rises ~linearly to step 8000 (no plateau); step-to-step IoU
+     0.983-0.989 at the end -> the eye still drifts ~1.5% of active pixels per 250 steps. Not yet stable.
+  2. Recon R^2 (val): per-seed 0.48-0.88, identical across lengths (e.g. seed0 0.814 vs 0.816), train ~= val, and FLAT
+     from step 1 — masks change almost completely yet R^2 does not move. In this testbed ANY 16 masks linearly span the
+     ~10-mode space, so this metric cannot discriminate observers; seed spread = each seed's own field.
+  3. Families: 2000 -> 9/10 slow rungs flat, obedience 1.00 x4 (0.94 x1); 8000 -> 8/10 flat, 1.00 x3 (0.94 x2); 8000-arm
+     flat rungs sit at amp 0.034-0.056 (cut 0.05), 2000-arm at 0.023-0.054. max_steps 5000->8000 lifted the 8000 arm
+     from 6/10 to 8/10 flat.
+  - Hypothesis "longer data -> more stable eye" NOT supported at 8000 steps; need a longer budget / convergence
+    criterion and a discriminating sufficiency metric. Awaiting user decision.
+- **Inspection GIFs (user request):** `src/probes/plots_observer.py --run <run> [--only training|state]` ->
+  `.tmps/observer_viz/obs_t8000_seed0_{training,state}.gif` (training: per-channel SSH|SST mask + feature per snapshot,
+  live family label / amp_r / IoU; state: x(t) over [8000,8600) with final footprints + 16 traces and a cursor).
+  Seen in the frames: the two flat rungs read SCATTERED pixels (speckle over ~2400 cells) — flat by cancellation,
+  not by locking onto the static pattern; at step 251 they still read cyclic, obey by step 8000 (16/16).
+
 ### 2026-09-30 — Long-series variant: training [0,8000), validation [8000,10000)
 
 - **User:** try training [0,8000], validation [8001,10000] (implemented as [8000,10000)), eye part retrained too.

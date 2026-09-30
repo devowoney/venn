@@ -66,6 +66,10 @@ def main(cfg: DictConfig) -> None:
     B = int(cfg.train.batch)
     steps = int(cfg.train.max_steps)
     g = torch.Generator(device="cpu").manual_seed(cfg.seed)  # index sampling RNG
+    # observer-stability record (feature flag, default off): the masks every `snap_every` steps, so
+    # a probe can ask whether the eye STOPS moving over training time (North Star 2026-09-30).
+    snap_every = int(cfg.train.get("snap_every") or 0)
+    snaps, snap_steps = [], []
 
     with torch.no_grad():                                  # untrained reference (D-013 baseline)
         masks_init = enc.masks().cpu().numpy()
@@ -278,6 +282,12 @@ def main(cfg: DictConfig) -> None:
         gnorm = torch.nn.utils.clip_grad_norm_(enc.parameters(), float(cfg.train.grad_clip))
         opt.step()
 
+        if snap_every and (step % snap_every == 0 or step == steps - 1):
+            # float16 keeps the record small (~0.25 MB per snapshot at K=16) and is ample for a
+            # 0/1-style mask that the probe thresholds at 0.5 anyway
+            snaps.append(enc.masks().detach().cpu().numpy().astype(np.float16))
+            snap_steps.append(step + 1)                    # optimizer steps taken so far
+
         if step % int(cfg.train.log_every) == 0 or step == steps - 1:
             with torch.no_grad():
                 var = torch.diagonal(cov)                  # per-channel RAW variance [K]
@@ -338,7 +348,9 @@ def main(cfg: DictConfig) -> None:
     np.savez("artifacts.npz", S=S, masks=masks, masks_init=masks_init, families=np.array(fams),
              truth_amp=truth_amp, truth_phi=truth_phi, truth_scale=truth_scale,
              temp_final=np.float32(enc.temp),
-             roles=np.array(roles))       # per-channel assigned role, for the probe to check against
+             roles=np.array(roles),       # per-channel assigned role, for the probe to check against
+             t_fit=np.int64(t_fit),       # end of the training slice, for out-of-sample probes
+             **(dict(masks_snap=np.stack(snaps), snap_steps=np.array(snap_steps)) if snaps else {}))
     metrics = dict(final_band=float(l_band.item()), final_line=float(l_line.item()),
                    final_mem=float(l_mem.item()), final_level=float(l_level.item()),
                    final_struct=float(l_struct.item()),
