@@ -2197,3 +2197,12 @@ held-out data fixes the spread: fitted on dev half 1, scored on dev half 2, spre
 - Applied inside the model around the ensemble mean: `dev' = mean_m(dev) + s_a (dev - mean_m(dev))`. The mean — and
   so the RMSE of the best estimate — is unchanged; only the spread is corrected. Requires `t_fit < t_tr`.
 - Cost: the ensemble model is fitted on 1750 steps, its deterministic reference (F-21) on 2000.
+
+#### Long-series variant (user, 2026-09-30): training `[0,8000)`, validation `[8000,10000)`
+
+Why: F-21/F-22 trace the overconfidence and the missing chaotic precision to memorization of ONE 2000-step
+training trajectory. Same system, same generator seed, 4x longer training record, SAME validation length (2000).
+- Eye-lobe retrained: `data.T=10000 train.t_train=8000` (runs `.tmps/runs/hf10k_enc_seed{0..4}`).
+- Forecasters: deterministic `hf.t_tr=8000` (fit `[0,8000)`); ensemble `hf.t_tr=8000 hf.t_fit=7750` (spread
+  calibration on `[7750,8000)`, the same 250-step held-out slice as before). All other hyperparameters unchanged, so
+  the only change against F-21/F-22 is the training length.

@@ -6,6 +6,22 @@
 
 ## Log
 
+### 2026-09-30 — Long-series variant: training [0,8000), validation [8000,10000)
+
+- **User:** try training [0,8000], validation [8001,10000] (implemented as [8000,10000)), eye part retrained too.
+- **Runs:** encoders `.tmps/runs/hf10k_enc_seed{0..4}` (`data.T=10000 train.t_train=8000`); forecasters
+  `.tmps/runs_hf/final10k_seed*` (deterministic, fit [0,8000)) and `final10k_ens_seed*` (ensemble, fit [0,7750),
+  calibrated on [7750,8000)); eval `.tmps/eval_hf/final10k/`. Hyperparameters unchanged.
+- **Result vs the 2000-step training (F-21/F-22), ensemble model:** all-channel RMSE h1 0.058 vs 0.10, h8 0.27 vs
+  0.50, h16 0.42 vs 0.57, h64 0.65 vs 0.71; chaotic ensemble-mean RMSE h8 0.35 vs 0.73, h16 0.54 vs 0.80; chaotic
+  CRPS h8 0.14 vs 0.37; hidden chaotic modes lost at lead 23 vs 8 (~1 Lyapunov time); cyclic RMSE h64 0.30 vs 0.43.
+  Needed spread inflation 1.0-2.2 (was 1.6-4.4); spread/error 0.81-1.04; member amplitude <= 1.18 (was 1.35).
+  The ensemble mean now beats its deterministic twin on chaotic channels (h1 0.059 vs 0.094, h8 0.35 vs 0.42).
+- **Observer note (not this agent):** on [0,8000) the slow rungs are no longer reliably flat — families 2/5/9,
+  1/5/10, 2/4/10, 0/5/11, 0/6/10 (seeds 0-4).
+- **Caveat:** new encoders too, so the comparison mixes training length AND observer version. Recorded as F-23
+  with user sign-off.
+
 ### 2026-09-29 (later) — Chaotic channels carry the uncertainty: ensemble head + spread calibration
 
 - **User:** attention forecaster "not bad, not good"; more precision needed, chaos is the challenge; the chaotic part

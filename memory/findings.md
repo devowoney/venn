@@ -1122,3 +1122,36 @@ same 1937 validation launches, 32 members at evaluation. Outputs `.tmps/eval_hf/
    remark). The cyclic rows' non-zero spread/error (0.10-0.17) comes from this channel.
 6. Root cause of 2-4: memorization of ONE 2000-step training trajectory. Candidate remedy (not run): a longer
    training series, same validation length.
+
+---
+
+### F-23. A 4x longer training record cures most of the memorization: chaos tracked ~1 Lyapunov time, honest ensemble (2026-09-30)
+
+Protocol: SOP 04 long-series variant — one field `data.T=10000`, training `[0,8000)`, validation `[8000,10000)`
+(same 2000-step validation length as F-21/F-22). Encoders `.tmps/runs/hf10k_enc_seed{0..4}` (`train.t_train=8000`);
+forecasters `.tmps/runs_hf/final10k_seed*` (deterministic, fit `[0,8000)`) and `final10k_ens_seed*` (ensemble, fit
+`[0,7750)`, spread calibrated on `[7750,8000)`); hyperparameters unchanged. Probe `src/probes/eval_history_forecaster.py`,
+5 seeds x 1937 launches, 32 members. Outputs `.tmps/eval_hf/final10k/` (`summary.txt`, `hf_ens.png`, `hf_eval.png`).
+Ensemble model, RMSE of the best estimate in training-std units (2000-step training = F-21/F-22 in brackets):
+
+| lead | 1 | 8 | 16 | 64 |
+|---|---|---|---|---|
+| all channels | **0.058** (0.10) | **0.27** (0.50) | **0.42** (0.57) | **0.65** (0.71) |
+| chaotic channels | **0.059** (0.098) | **0.35** (0.73) | **0.54** (0.80) | **0.81** (0.93) |
+| cyclic channels | **0.048** (0.068) | **0.14** (0.25) | **0.22** (0.34) | **0.30** (0.43) |
+| chaotic CRPS | **0.033** (0.054) | **0.14** (0.37) | **0.25** (0.43) | **0.44** (0.52) |
+| chaotic spread / error | 1.04 (1.07) | 0.81 (0.90) | 0.88 (0.95) | 1.04 (1.10) |
+| chaotic member amplitude | 1.00 (1.00) | 0.97 (1.11) | 1.02 (1.15) | 1.18 (1.35) |
+
+1. **Precision, chaos included.** Hidden chaotic modes stay above corr 0.5 until lead **23** (was 8), i.e. about one
+   Lyapunov time (~22 steps) — near the physical limit. Error roughly halves at h1-h8 on every family.
+2. **Memorization largely cured.** Spread inflation needed by the calibration fell to 1.0-1.2 at h1 and 1.4-2.2 at
+   h64 (was 1.6-1.8 and 3.4-4.4); deterministic training loss rose 0.08 -> 0.15-0.18 (less learnt by heart).
+3. **The ensemble now also sharpens the best estimate** on chaotic channels vs its deterministic twin (same encoders):
+   h1 0.059 vs 0.094, h8 0.35 vs 0.42, h16 0.54 vs 0.58, h64 0.81 vs 0.81; stationary/cyclic within +-0.03 of the
+   twin. Members are closer to realistic (amplitude <= 1.18) with honest spread (0.81-1.04).
+4. Causality exact (max diff 0.0) on all seeds.
+5. **Caveats.** Encoders were retrained, so the bracketed comparison mixes training length AND observer version (the
+   ensemble-vs-twin comparison is clean). Hyperparameters were tuned for 2000 training steps; less regularization may
+   now be better (untested). Observer side: on `[0,8000)` the slow rungs are no longer reliably flat (families 2/5/9,
+   1/5/10, 2/4/10, 0/5/11, 0/6/10 for seeds 0-4), so the chaos mask covers 9-11 channels.

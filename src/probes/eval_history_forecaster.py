@@ -348,7 +348,7 @@ def ens_figure(R: list, Q: list, out: str) -> None:
     for j, fam in enumerate(FAMS):
         ax = fig.add_subplot(gs[0, j])
         for key, RR, lab, sty in [("rmse", R, "ensemble mean", dict(color=COL[fam], lw=2.2)),
-                                  ("rmse", Q, "deterministic (F-21)", dict(color=COL[fam], lw=1.4, ls="--")),
+                                  ("rmse", Q, "deterministic reference", dict(color=COL[fam], lw=1.4, ls="--")),
                                   ("rmse_p", R, "persistence", dict(color="k", lw=1.2, ls="--")),
                                   ("rmse_c", R, "climatology", dict(color="0.55", lw=1.2, ls=":"))]:
             v = np.array([fam_mean(r, key, fam) for r in RR])
@@ -362,7 +362,7 @@ def ens_figure(R: list, Q: list, out: str) -> None:
     # row 2: chaotic channels -- CRPS, spread/error, amplitude
     fam = "chaotic"
     ax = fig.add_subplot(gs[1, 0])
-    for RR, lab, ls in [(R, "ensemble", "-"), (Q, "deterministic (= MAE)", "--")]:
+    for RR, lab, ls in [(R, "ensemble", "-"), (Q, "deterministic reference (= MAE)", "--")]:
         ax.plot(leads, np.array([fam_mean(r, "crps", fam) for r in RR]).mean(0), color=COL[fam], ls=ls, lw=2, label=lab)
     ax.set_title("chaotic channels: CRPS (lower = better)")
     ax.set_xlabel("lead (steps ahead)")
@@ -380,7 +380,7 @@ def ens_figure(R: list, Q: list, out: str) -> None:
     ax.set_ylim(bottom=0)
     ax = fig.add_subplot(gs[1, 2])
     for RR, key, lab, ls in [(R, "mamp", "one ensemble member", "-"), (R, "amp", "ensemble mean", ":"),
-                             (Q, "amp", "deterministic (F-21)", "--")]:
+                             (Q, "amp", "deterministic reference", "--")]:
         ax.plot(leads, np.array([fam_mean(r, key, fam) for r in RR]).mean(0), color=COL[fam], ls=ls, lw=2, label=lab)
     ax.axhline(1, color="k", ls=":", lw=0.8)
     ax.set_title("chaotic channels: amplitude (forecast / true std)")
@@ -402,14 +402,14 @@ def ens_figure(R: list, Q: list, out: str) -> None:
                 ax.plot(tt, r0["ens_ex"][i0, mm, :, k], color=COL[fam], lw=0.6, alpha=0.45,
                         label="ensemble members" if (n_ == 0 and mm == 0) else None)
             ax.plot(tt, r0["zhat"][t0, :, k], color=COL[fam], lw=2.2, label="ensemble mean" if n_ == 0 else None)
-            ax.plot(tt, q0["zhat"][t0, :, k], color="k", lw=1.1, ls="--", label="deterministic (F-21)" if n_ == 0 else None)
+            ax.plot(tt, q0["zhat"][t0, :, k], color="k", lw=1.1, ls="--", label="deterministic reference" if n_ == 0 else None)
             ax.plot([t0], [r0["z"][t0, k]], "o", color="k", ms=5, label="initial condition" if n_ == 0 else None)
         ax.set_title(f"seed 0, channel {k} ({fam}): 8 of the members, three launches", fontsize=10)
         ax.set_xlabel("time step (validation)")
         ax.set_ylabel("z (training std units)")
         ax.legend(fontsize=7, loc="best")
     ax = fig.add_subplot(gs[2, 2])
-    for RR, lab, ls in [(R, "ensemble mean", "-"), (Q, "deterministic (F-21)", "--")]:
+    for RR, lab, ls in [(R, "ensemble mean", "-"), (Q, "deterministic reference", "--")]:
         v = np.array([r["mode_corr"][:, [i for i, f in enumerate(r["mode_fam"]) if f == "chaotic"]].mean(1) for r in RR])
         ax.plot(leads, v.mean(0), color=COL["chaotic"], lw=2, ls=ls, label=lab)
     ax.axhline(0.5, color="k", lw=0.8, ls=":")
