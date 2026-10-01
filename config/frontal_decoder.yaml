@@ -1,0 +1,19 @@
+# VENN module 3 — FRONTAL DECODER, the "frontal cortex" (D-033, SOP 05). Every hyperparameter lives here (D-014).
+#   python -m src.train.fit_frontal_decoder dec.encoder_run=.tmps/runs/hf10k_enc_seed0
+defaults:
+  - config              # inherit seed / device from the encoder config
+  - _self_
+
+dec:
+  encoder_run: null     # frozen eye-lobe run dir holding artifacts.npz + .hydra/config.yaml (required)
+  t_tr: 8000            # training set = [0, t_tr) -- must equal the encoder's train.t_train; validation = [t_tr, T)
+  lags: [0]             # latent HISTORY read by the decoder: window(tau) = [S(tau - L) for L in lags].
+                        # [0] = current state only (default: eyes ~ modes -> fully observed, history adds nothing,
+                        # probe 2026-10-01). Information hole (eyes < signals): e.g. [0,1,2,4,8,16,32,64]
+  ridge: 1.0e-3         # ridge penalty relative to the sample count, on standardized latent features
+
+hydra:
+  run:
+    dir: ${hydra:runtime.cwd}/.tmps/runs_dec/${now:%Y%m%d_%H%M%S}
+  job:
+    chdir: true

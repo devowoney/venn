@@ -6,6 +6,12 @@
 
 ## Status
 
+- **Frontal-cortex track (2026-10-01, branch `memory-intepreter`, D-033, SOP 05):** module 3 = frontal decoder maps the
+  hippocampus's latent forecast to the field. v0 built (linear ridge, lags [0]) and scored on M=10/K=16: field R²/C
+  .99 (h1) / .96 (h8) / .84 (h64); decoding loss ~0.007, the rest is the hippocampus.
+  - [ ] User sign-off on the result -> F-26
+  - [ ] Field-space uncertainty: decode the hippocampus ensemble members (spread map, field CRPS)
+  - [ ] Hole regime (eyes < signals): `dec.lags` history window, when a testbed needs it
 - **Observer track (2026-09-30, branch `feature-observer`, D-032):** North Star = a stable eye (over training time)
   with sufficient signal to reconstruct the state. Measured (F-24/F-25): eye still drifts at 8000 steps, no gain from
   8000 vs 2000 training steps; reconstruction already at the noise ceiling (R²/C 0.97-1.00) because the M=10 testbed

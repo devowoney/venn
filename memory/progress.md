@@ -6,6 +6,42 @@
 
 ## Log
 
+### 2026-10-01 — Module 3 (frontal cortex / decoder) opened: branch `memory-intepreter`; information-hole probe
+
+- **User:** first stage of eye-lobe (observer) and hippocampus (predictor, = the history forecaster) done; build the
+  third part, the frontal cortex (decoder): reconstruct the field from the latent history and interpolate the
+  information hole. Branch + worktree `memory-intepreter` (`.claude/worktrees/memory-intepreter`, from main `b8a4e7b`).
+  Naming change vs D-031 (prefrontal cortex = forecaster, unconscious = module 3) not yet recorded as a decision.
+- **Explore probe** `.tmps/decoder_probe/hole_probe.py` (+ `plot_hole.py` -> `hole_probe.png`): balanced R^2 / noise
+  ceiling (D-032 score), ridge-linear decode fitted [0,8000), scored [8000,10000), on existing feature-observer eyes.
+  | eyes | snapshot S(t) | causal history S(t..t-64), 8 lags | two-sided S(t±64) |
+  | M=40 K=16 (D=74 > K, hole) | 0.73-0.78 | 0.92-0.94 | 0.92-0.94 |
+  | M=40 K=32 | 0.92-0.94 | 0.985-0.992 | same |
+  | M=10 K=16 (control, no hole) | 0.98-1.00 | -0.001..-0.007 | slightly lower |
+  -> the latent history linearly carries ~70% of what the snapshot misses; future lags add nothing (causal suffices);
+  no gain where there is no hole. Per-cell maps: gain sits exactly on the snapshot's blind patches; residual = a few
+  small isolated bumps. Indicative (linear, 3 seeds); no code in src/ yet; design awaits user sign-off.
+- **User rulings:** (1) hole = (a), but the current testbed is fully observed; no SSH<->SST cross-inference, just build
+  a decoder; (2) the decoder maps the hippocampus forecast to the field ("the core idea"); (3) testbed = eyes ~ modes
+  (M=10/K=16), not M=40/K=16; (4) record the renaming -> D-033 (+ SOP 05 at the end of decisions.md).
+- **Built (new files only):** `src/models/frontal_decoder.py` (closed-form ridge, balanced units, `lags` window, frozen),
+  `src/train/fit_frontal_decoder.py` + `config/frontal_decoder.yaml` (`dec.*`, default lags [0]),
+  `src/probes/eval_frontal_decoder.py` (streaming field forecast, references, figures).
+- **Runs:** decoders `.tmps/runs_dec/dec10k_seed{0..4}` on eyes `history-forecastor/.tmps/runs/hf10k_enc_seed*`
+  (train [0,8000)). Reconstruction from the true latent, val R^2/C 0.994/0.991/0.999/0.983/1.000 = the D-032 table
+  exactly (wiring check). Eval `.tmps/eval_dec/final10k_ens/` (hippocampus `final10k_ens_seed*`) and
+  `.tmps/eval_dec/final10k_det/` (`final10k_seed*`); figures `field_forecast.png`, `snap_dec10k_seed*.png`.
+- **Result (field R^2 / ceiling, validation, mean of 5 seeds, ensemble-mean hippocampus):**
+  | lead | 1 | 2 | 4 | 8 | 16 | 32 | 64 |
+  | decoded true latent | .993 | .993 | .993 | .993 | .993 | .993 | .994 |
+  | hippocampus -> frontal decoder | .990 | .988 | .984 | .963 | .917 | .839 | .838 |
+  | hippocampus -> pseudo-inverse (D-012) | .577 | .537 | .417 | .159 | -.41 | -1.50 | -1.73 |
+  | persistence x(t) | .575 | .532 | .404 | .159 | -.31 | -1.31 | -1.64 |
+  Deterministic hippocampus: h1 .988, h8 .959, h64 .825. Per variable h64: SSH .79, SST .88. Decoding loses ~0.007;
+  the rest is the hippocampus (chaotic modes). Snapshots: decoder fields clean, large scale held to lead 64, small
+  chaotic blobs drift; pseudo-inverse stamps mask footprints (rings/patches) and keeps x(t)'s noise.
+- **Not recorded yet:** finding (F-26) awaits user sign-off. Nothing committed (user handles git).
+
 ### 2026-10-02 (later) — Multi-scenario for the WHOLE family, spread from a predefined certainty score
 
 - **User:** scenarios for every family; a predefined score tells how likely the prediction is (stationary few steps ->
@@ -349,8 +385,6 @@
 - **Process note:** the background-job harness forced isolation, so the code lives in the git
   worktree `.claude/worktrees/latent-predictor` (branch `worktree-latent-predictor`), NOT in the
   main checkout. Git remains the user's; nothing was committed to `main`.
-- **Repo issue spotted (pre-existing):** `.gitignore` is committed WITH unresolved merge-conflict
-  markers (`<<<<<<< HEAD` / `=======` / `>>>>>>> 7afcabf`). Harmless today, worth cleaning.
 - **Pending / next:** (1) a real classifier — it now blocks module 2's per-family interpretation as
   well as module 1's (population still 0/14/2 vs the 1/3/6 target); (2) module 3, the forecaster by
   gradient inversion — `predictor.rollout` already returns exactly the `s_hat` it needs;
@@ -874,8 +908,6 @@ interpretation of module 2's results, not just module 1's.
   checkout. Git remains the user's (standing rule) — nothing was committed to `main`.
 - Ran in `oceanai` (CUDA available). Encoder run reused: `.tmps/runs/20260827_151413`, copied into
   the worktree's own `.tmps/` so nothing wrote into the user's checkout.
-- `.gitignore` in the repo is committed WITH unresolved merge-conflict markers
-  (`<<<<<<< HEAD` / `=======` / `>>>>>>> 7afcabf`). Harmless today (both blocks' patterns are read
   as literal patterns, so `.tmps/` is still ignored) but it should be cleaned up.
 
 #### Next
@@ -1431,8 +1463,6 @@ re-try)"; the `05` row's read "the chronological story, including dead ends and 
    saved config. The new value lives in `config/config.yaml`. `evaluate.py` depends on this.
 3. **Re-scoring old runs changes their reported labels**, by design (D-025/D-026). Any figure or
    number quoted from before 2026-08-31 should be re-read with `validate_labeller.py`.
-4. **`.gitignore` has unresolved merge-conflict markers** (`<<<<<<< HEAD`, `=======`,
-   `>>>>>>> 7afcabf`). Pre-existing, harmless today, worth cleaning during the merge.
 5. Run order to reproduce:
    ```
    conda run -n oceanai python -m src.probes.validate_labeller     # readout first

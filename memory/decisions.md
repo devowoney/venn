@@ -893,6 +893,27 @@ F-24, F-25. Full derivation of the score: `memory/reconstruction_score.md`.
 - **Open, not decided:** (a) harder testbed (e.g. M=40, 74 signals) with K sized to it; (b) the family ladder at
   many modes (0 stationary channels at M=40); (c) a longer budget + stop rule for "stable".
 
+## D-033 — Brain naming of the three parts; module 3 = frontal cortex (decoder) maps the latent forecast to the field
+
+**Date:** 2026-10-01. **Source:** user rulings in the `memory-intepreter` session (progress.md 2026-10-01), naming
+signed off ("4. Yes"). Amends the naming of D-031 / SOP 04; refines D-012's module 3. Spec: SOP 05.
+
+- **Branch.** Module-3 work lives on `memory-intepreter` (worktree `.claude/worktrees/memory-intepreter`, branched
+  from `main` @ `b8a4e7b`, which holds both the observer and the history-forecaster tracks).
+- **Names (supersede D-031's).** (1) **eye-lobe** = encoder / observer (module 1); (2) **hippocampus** = history
+  forecaster (module 2; D-031 / SOP 04 called it "prefrontal cortex"); (3) **frontal cortex** = decoder (module 3;
+  D-031 called it "unconscious memory"). Older records keep their wording; read "prefrontal cortex" there as the
+  hippocampus.
+- **Job of the frontal cortex (user: "the core idea").** Forecast in the latent history, then map the latent forecast
+  to the physical field: `x_hat(t+a) = Dec( S_hat(t+a) )`. Replaces D-012's pseudo-inverse
+  `x(t) + M+(s_hat - M x(t))` as the latent -> field map.
+- **"Information hole" = (a):** field state that the eyes' current reading does not capture (eyes fewer than the
+  field's independent signals); the decoder may read the latent HISTORY to fill it. NOT cross-variable inference
+  (no SSH -> SST or SST -> SSH).
+- **Testbed:** eyes at the level of the modes (observer sweep, F-25: ceiling once K ~ D = 2(M-1) - 4) -> the existing
+  M=10 / K=16 setup (`hf10k_enc_seed*`, train [0,8000), validation [8000,10000)), where the state is FULLY observed.
+  The M=40/K=16 hole regime is not the default (user: "Nope").
+
 ## Numbering collisions with the encoder track
 
 The module-2 (`latent-predictor`) branch and the parallel `stationary-observer` (encoder) session both
@@ -2246,6 +2267,53 @@ training trajectory. Same system, same generator seed, 4x longer training record
 - Forecasters: deterministic `hf.t_tr=8000` (fit `[0,8000)`); ensemble `hf.t_tr=8000 hf.t_fit=7750` (spread
   calibration on `[7750,8000)`, the same 250-step held-out slice as before). All other hyperparameters unchanged, so
   the only change against F-21/F-22 is the training length.
+
+## SOP 05 — Frontal Decoder (module 3, "frontal cortex")
+
+> Golden Rule: update this SOP BEFORE changing `src/models/frontal_decoder.py`, `src/train/fit_frontal_decoder.py`,
+> `src/probes/eval_frontal_decoder.py` or `config/frontal_decoder.yaml`. Branch `memory-intepreter` (2026-10-01). D-033.
+
+### Place in the emulator
+
+| part | brain analogue | VENN module | job |
+|---|---|---|---|
+| (1) | eye-lobe | encoder / observer (SOP 02) | field `x_t` -> latent state `S_t` (K channels) |
+| (2) | hippocampus | history forecaster (SOP 04) | history `S_0..S_t` -> `S_hat(t+a)`, a = 1..64 |
+| (3) | **frontal cortex** | **frontal decoder (this SOP)** | latent (history) -> field; `S_hat(t+a)` -> `x_hat(t+a)` |
+
+All three fitted on the same training set `[0, t_tr)` and frozen (D-030/D-031).
+
+### Data-First schema
+
+- In: frozen eye run (`artifacts.npz` `S[T,K]`, field regenerated from its `.hydra/config.yaml` + seed);
+  frozen hippocampus run (`model.pt`, forecasts `S_hat[T-1, A=64, K]`, ensemble model -> mean of 32 members).
+- Decoder input: latent window `[S(tau - L) for L in dec.lags]` -> `[len(lags) * K]`. In a forecast from launch t,
+  window steps after t take the forecast `S_hat`, earlier steps the observed history.
+- Out: field `x_hat[V=2, H=64, W=64]` (physical units).
+
+### Model
+
+Closed-form ridge, linear, in balanced units (per-cell standardization with training stats, the D-032 score's
+units): `x_hat = mu_y + sd_y * (b + W . (window - mu_s)/sd_s)`. Why linear: the testbed field is a linear
+superposition and every channel a linear read of it. `dec.lags = [0]` (default; fully observed testbed, history
+adds nothing); `dec.ridge = 1e-3` (relative to the sample count). `dec.t_tr` must equal the encoder's `train.t_train`.
+
+### Run
+
+```bash
+python -m src.train.fit_frontal_decoder dec.encoder_run=<eye run> hydra.run.dir=.tmps/runs_dec/<name>
+python -m src.probes.eval_frontal_decoder --dec .tmps/runs_dec/<name>* --hf <hippocampus runs> --out .tmps/eval_dec/<name>
+```
+
+The probe pairs decoder and hippocampus through their shared encoder run.
+
+### Readout standard
+
+Per lead a = 1..64, validation launches only (all targets in `[t_tr, T)`): field balanced R^2 / noise ceiling, pooled
+and per variable, for: forecast (hippocampus -> decoder), decoded TRUE latent (decoding ceiling = perfect
+hippocampus), persistence `x(t)`, climatology, D-012 pseudo-inverse. Gap ceiling - forecast = hippocampus error;
+1 - ceiling = decoding error. Plus field snapshots (truth / decoder / pseudo-inverse at leads 1, 8, 16, 64).
+Note: persistence and the pseudo-inverse carry the observation noise of `x(t)`, so they sit below 1 already at lead 1.
 
 #### Standardization stays inside the history predictor (user ruling, 2026-10-01)
 
