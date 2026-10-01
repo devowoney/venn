@@ -41,6 +41,30 @@
   the rest is the hippocampus (chaotic modes). Snapshots: decoder fields clean, large scale held to lead 64, small
   chaotic blobs drift; pseudo-inverse stamps mask footprints (rings/patches) and keeps x(t)'s noise.
 - **Not recorded yet:** finding (F-26) awaits user sign-off. Nothing committed (user handles git).
+- **User:** "works well a priori"; pseudo-inverse not needed. "The forecaster makes a spread with the chaotic signal;
+  does the interpreter receive it and make a spread too?" -> No: the eval decoded only the ensemble MEAN. User: "remove
+  it and do what I said (spread from chaotic ensemble)". The 32 members are the hippocampus's own ensemble head
+  (`final10k_ens`, SOP 04), spread on chaotic channels only (measured non-chaotic latent spread = 0 exactly).
+- **Changed (SOP 05 first, then code):** `eval_frontal_decoder.py` now decodes EVERY member -> field ensemble; skill =
+  member mean (identical numbers to before, linear decoder); new uncertainty readout vs the NOISE-FREE state
+  (`generate_field` obs_noise=0, same seed): spread/error and corr(spread map, error map); snapshots in physical units
+  (truth / member 1 / member 2 / mean / spread). Pseudo-inverse and the mean collapse removed. Superseded outputs
+  `final10k_det/` deleted; new `.tmps/eval_dec/final10k_ens/` (`field_forecast.png`, `snap_dec10k_seed*.png`).
+- **Result (validation, 5 seeds):** field spread sits on the chaotic pattern footprints only; large-scale structure
+  identical in all members. spread/error h1 0.35-0.53, h8 0.47-0.86, h16 0.48-0.99, h64 0.66-1.28 (seed 0 calibrated,
+  1 near, 2-4 under-dispersed); corr(spread map, error map) h8 0.70-0.95, h64 0.75-0.79. Hypothesis (untested):
+  short-lead under-dispersion = error of the deterministic (non-chaotic) channels + decoding, which carry no spread.
+- **User:** "When making a report, use RMSE to compare the performance by lead time." -> SOP 05 readout headline =
+  field RMSE per lead (field units, unit-std variables, pooled over cells, member mean vs OBSERVED field; floor =
+  obs_noise 0.05); R^2/C kept as secondary in the json. Lead panels + printout of `eval_frontal_decoder.py` now RMSE.
+  Saved as a feedback memory (report-rmse-by-lead).
+  | field RMSE, 5-seed mean | h1 | h2 | h4 | h8 | h16 | h32 | h64 |
+  | decoded true latent | .051 | .051 | .051 | .051 | .051 | .051 | .051 |
+  | hippocampus -> frontal decoder (member mean) | .060 | .064 | .074 | .114 | .165 | .231 | .240 |
+  | persistence x(t) | .109 | .166 | .267 | .390 | .544 | .762 | .767 |
+  | climatology | .548 | .548 | .548 | .548 | .547 | .547 | .549 |
+  Per variable (forecast) h1/h8/h16/h64: SSH .068/.144/.205/.289, SST .051/.072/.110/.175. Field spread (vs noise-free)
+  .025/.100/.174/.325. Decoding sits on the noise floor (.051 vs .05); persistence passes climatology at ~h16.
 
 ### 2026-10-02 (later) — Multi-scenario for the WHOLE family, spread from a predefined certainty score
 

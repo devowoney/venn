@@ -10,7 +10,8 @@
   hippocampus's latent forecast to the field. v0 built (linear ridge, lags [0]) and scored on M=10/K=16: field R²/C
   .99 (h1) / .96 (h8) / .84 (h64); decoding loss ~0.007, the rest is the hippocampus.
   - [ ] User sign-off on the result -> F-26
-  - [ ] Field-space uncertainty: decode the hippocampus ensemble members (spread map, field CRPS)
+  - [x] Field-space uncertainty: every chaotic-ensemble member decoded -> field spread (2026-10-01)
+  - [ ] Field spread under-dispersed on seeds 2-4 and at short leads: decide whether to calibrate in field space
   - [ ] Hole regime (eyes < signals): `dec.lags` history window, when a testbed needs it
 - **Observer track (2026-09-30, branch `feature-observer`, D-032):** North Star = a stable eye (over training time)
   with sufficient signal to reconstruct the state. Measured (F-24/F-25): eye still drifts at 8000 steps, no gain from

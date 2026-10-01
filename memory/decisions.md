@@ -2286,10 +2286,13 @@ All three fitted on the same training set `[0, t_tr)` and frozen (D-030/D-031).
 ### Data-First schema
 
 - In: frozen eye run (`artifacts.npz` `S[T,K]`, field regenerated from its `.hydra/config.yaml` + seed);
-  frozen hippocampus run (`model.pt`, forecasts `S_hat[T-1, A=64, K]`, ensemble model -> mean of 32 members).
+  frozen hippocampus run (`model.pt`). Ensemble model (`final10k_ens`): M = 32 members `S_hat[T-1, M, A=64, K]`,
+  spread on the CHAOTIC channels only (SOP 04 ensemble head); deterministic model = 1 member.
 - Decoder input: latent window `[S(tau - L) for L in dec.lags]` -> `[len(lags) * K]`. In a forecast from launch t,
   window steps after t take the forecast `S_hat`, earlier steps the observed history.
-- Out: field `x_hat[V=2, H=64, W=64]` (physical units).
+- Out: field ensemble `x_hat[M, V=2, H=64, W=64]` (physical units): EVERY member is decoded, never their mean
+  (user 2026-10-01: "spread from chaotic ensemble"). Field mean and field spread are read off the members, so
+  the field uncertainty sits where the chaotic patterns are.
 
 ### Model
 
@@ -2298,16 +2301,21 @@ units): `x_hat = mu_y + sd_y * (b + W . (window - mu_s)/sd_s)`. Why linear: the 
 superposition and every channel a linear read of it. `dec.lags = [0]` (default; fully observed testbed, history
 adds nothing); `dec.ridge = 1e-3` (relative to the sample count). `dec.t_tr` must equal the encoder's `train.t_train`.
 
-### Run
-
-```bash
-python -m src.train.fit_frontal_decoder dec.encoder_run=<eye run> hydra.run.dir=.tmps/runs_dec/<name>
-python -m src.probes.eval_frontal_decoder --dec .tmps/runs_dec/<name>* --hf <hippocampus runs> --out .tmps/eval_dec/<name>
-```
-
-The probe pairs decoder and hippocampus through their shared encoder run.
-
 ### Readout standard
+
+Per lead a = 1..64, validation launches only (all targets in `[t_tr, T)`):
+- headline (user 2026-10-01: "use RMSE to compare the performance by lead time"): field RMSE per lead, in field
+  units (each variable is unit-std by construction), pooled over all cells, of the member MEAN vs the OBSERVED
+  field, side by side with decoded TRUE latent, persistence `x(t)`, climatology; pooled and per variable.
+  Floor: obs_noise = 0.05 (unpredictable noise in the observed field). Lead tables and lead figures use RMSE.
+- secondary: field balanced R^2 / noise ceiling of the member MEAN, pooled and per variable, against decoded TRUE latent
+  (decoding ceiling = perfect hippocampus), persistence `x(t)`, climatology. Gap ceiling - forecast = hippocampus error;
+  1 - ceiling = decoding error. Persistence carries the observation noise of `x(t)`, so it is below 1 already at lead 1.
+- uncertainty: field spread (std across members, finite-M corrected) / RMSE of the member mean, both against the
+  NOISE-FREE state (same generator seed, obs_noise = 0): the members should cover the state's uncertainty, not the
+  iid observation noise; ~1 = calibrated. Plus corr(spread map, error map) over cells = is the spread in the right place.
+- figures: lead curves; snapshots (truth / member 1 / member 2 / member mean / member spread at leads 8, 64).
+- D-012's pseudo-inverse is no longer a reference (user: "we didn't need it").
 
 Per lead a = 1..64, validation launches only (all targets in `[t_tr, T)`): field balanced R^2 / noise ceiling, pooled
 and per variable, for: forecast (hippocampus -> decoder), decoded TRUE latent (decoding ceiling = perfect
