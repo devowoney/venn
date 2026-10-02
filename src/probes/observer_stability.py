@@ -30,7 +30,7 @@ import numpy as np  # noqa: E402
 import torch  # noqa: E402
 from omegaconf import OmegaConf  # noqa: E402
 
-from src.data.synthetic import GenConfig, generate_field  # noqa: E402
+from src.data.synthetic import GenConfig, generate_field, normalize_input  # noqa: E402
 
 
 def iou(a: np.ndarray, b: np.ndarray) -> np.ndarray:
@@ -68,8 +68,10 @@ def score_run(run: str, t_val: int, device: str) -> dict:
     t_fit = int(art["t_fit"])
     assert t_fit <= t_val < T, f"{run}: training slice {t_fit} overlaps validation start {t_val}"
 
-    field = torch.from_numpy(field_np).to(device)                      # [T,V,H,W]
+    field = torch.from_numpy(field_np).to(device)                      # [T,V,H,W] reconstruction target
     Y = field.reshape(T, -1).double()                                  # [T,N]
+    # the eye encodes what it was trained on (SOP 02 input_norm); the target stays the generator's field
+    field_in = torch.from_numpy(normalize_input(field_np, cfg.train.get("input_norm", "none"), t_fit)).to(device)
     snaps = art["masks_snap"].astype(np.float32)                       # [n,K,V,H,W]
     # noise ceiling: the best balanced R^2 ANY observer can reach, because the generator's iid obs noise is
     # unpredictable. Per cell: 1 - noise_var / cell_var, averaged over cells like the balanced R^2 itself.
@@ -79,7 +81,7 @@ def score_run(run: str, t_val: int, device: str) -> dict:
     rows = []
     for j, m in enumerate(snaps):
         with torch.no_grad():                                          # s_i = <mask_i, field> (norm: none)
-            S = torch.einsum("tvhw,kvhw->tk", field, torch.from_numpy(m).to(device)).double()
+            S = torch.einsum("tvhw,kvhw->tk", field_in, torch.from_numpy(m).to(device)).double()
         r2_tr, r2_va = oos_recon_r2(Y, S, t_fit, t_val)
         rows.append(dict(step=int(art["snap_steps"][j]),
                          iou_final=float(iou(on[j], on[-1]).mean()),

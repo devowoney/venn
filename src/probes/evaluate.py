@@ -28,7 +28,7 @@ import torch
 from omegaconf import OmegaConf
 from torch.utils.tensorboard import SummaryWriter
 
-from src.data.synthetic import GenConfig, generate_field
+from src.data.synthetic import GenConfig, generate_field, normalize_input
 from src.probes.family import FAMILIES, amp_ratio, label_family, series_stats
 
 # NOTE: `series_stats` / `label_family` used to live here. They moved to src/probes/family.py after
@@ -206,7 +206,9 @@ def main() -> None:
     pop = {f: sum(r["label"] == f for r in rows) for f in FAMILIES}
     cos_ov, iou_ov = mean_pairwise(masks)
     r2, r2b = recon_r2(field, S, device)
-    S_init = np.einsum("tvhw,kvhw->tk", field, masks_init)
+    # the untrained eye must see the SAME input as the trained one (SOP 02 input_norm)
+    field_in = normalize_input(field, cfg.train.get("input_norm", "none"), int(art["t_fit"]) if "t_fit" in art.files else None)
+    S_init = np.einsum("tvhw,kvhw->tk", field_in, masks_init)
     r2_i, r2b_i = recon_r2(field, S_init, device)
     mr, mr_init = mode_r2(amp, S, device), mode_r2(amp, S_init, device)
     mode_recovery = {f"m{j}({fams[j]})": dict(max_abs_corr=float(np.abs(corr[:, j]).max()),

@@ -23,7 +23,7 @@ import hydra                                              # noqa: E402
 from omegaconf import DictConfig, OmegaConf               # noqa: E402
 from torch.utils.tensorboard import SummaryWriter         # noqa: E402
 
-from src.data.synthetic import GenConfig, generate_field  # noqa: E402
+from src.data.synthetic import GenConfig, generate_field, normalize_input  # noqa: E402
 from src.models.encoder import SelectionEncoder            # noqa: E402
 from src.train.spectral import (band_plan, level_term, memory_term, rung_roles,  # noqa: E402
                                spectral_terms, structure_term)
@@ -43,11 +43,14 @@ def main(cfg: DictConfig) -> None:
     # --- data (hidden-truth generator) ------------------------------------------------------
     gen_cfg = GenConfig(**OmegaConf.to_container(cfg.data, resolve=True))
     field_np, truth = generate_field(gen_cfg, seed=cfg.seed)
-    field = torch.from_numpy(field_np).to(device)          # [T,V,H,W]
-    T, V, H, W = field.shape
+    T = field_np.shape[0]
     # time split (SOP 02, D-030): the observer learns only from the PAST [0, t_fit). null = full record.
     # The final S is still encoded over all of T, so module 2 can be scored on days never seen here.
     t_fit = int(cfg.train.t_train) if cfg.train.get("t_train") else T
+    # what the eye sees (SOP 02, input_norm experiment 2026-10-01): default = the generator's field as is
+    field_np = normalize_input(field_np, cfg.train.get("input_norm", "none"), t_fit)
+    field = torch.from_numpy(field_np).to(device)          # [T,V,H,W]
+    T, V, H, W = field.shape
     field_fit = field[:t_fit]                              # [t_fit,V,H,W] the only data that trains
     fams = [m["family"] for m in truth["modes"]]
 

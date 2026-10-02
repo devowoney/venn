@@ -1492,6 +1492,18 @@ windows, the flat-level term, `e_ref`, `cell_mean` and `x_ref` all come from `fi
 reaches a gradient. The saved `artifacts.npz` `S` is still encoded over the FULL `[0,T)` with the frozen masks,
 so module 2 can score on days the observer never saw. Required by the history forecaster (SOP 04).
 
+### Input normalization `train.input_norm` (feature flag, added 2026-10-01 — EXPERIMENT, not a default)
+
+What the eye sees. The generator already standardizes each VARIABLE globally (one mean/std for SSH, one for SST);
+inside a variable the cells keep their natural loudness, so energetic cells dominate every `s_i`.
+`none` (default) = that field, the historical behaviour. `cell_z` = every cell z-scored, `(x - mean_c) / std_c`:
+equal loudness per cell, but the time mean is gone, so the stationary mode (which lives ONLY in the time mean,
+rev3) becomes invisible and the flat rungs lose their target. `cell_scale` = `x / std_c`: equal temporal loudness,
+time mean kept. Both lift pure-noise cells (std ~ obs_noise) to unit variance. Statistics from `[0, t_fit)` only
+(`train.t_train`). Helper: `src/data/synthetic.py: normalize_input`; every probe that RE-ENCODES the field from
+masks must apply it (`evaluate`, `observer_stability`, `plots_observer`); probes reading `artifacts.npz` `S` are
+consistent automatically. Reconstruction targets stay the generator's field.
+
 ### v0 defaults (D-015 — all overridable via ./config/)
 
 | knob | default | alt (deferred) |

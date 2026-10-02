@@ -168,6 +168,7 @@ train:
   # Balance the GRADIENTS, not the loss values -- the values differ by 300x and mislead.
   log_every: 50
   t_train: null         # SOP 02 time split: observer learns only from [0, t_train). null = full record
+  input_norm: none      # what the eye sees: none (generator field) | cell_z | cell_scale (SOP 02, experiment)
                         # (historical default). 1400 = module-2 protocol (D-030): scored days stay unseen.
   snap_every: 0         # save the masks every N steps into artifacts.npz (masks_snap, snap_steps) for the
                         # observer-stability probe. 0 = off (default; artifacts unchanged).

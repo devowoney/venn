@@ -29,7 +29,7 @@ import numpy as np  # noqa: E402
 from matplotlib.animation import FuncAnimation, PillowWriter  # noqa: E402
 from omegaconf import OmegaConf  # noqa: E402
 
-from src.data.synthetic import GenConfig, generate_field  # noqa: E402
+from src.data.synthetic import GenConfig, generate_field, normalize_input  # noqa: E402
 from src.probes.family import amp_ratio, label_family, series_stats  # noqa: E402
 
 # categorical slots 1-3 of the validated reference palette (dataviz skill), fixed order = rung order
@@ -176,6 +176,8 @@ def main() -> None:
     art = np.load(os.path.join(args.run, "artifacts.npz"), allow_pickle=True)
     cfg = OmegaConf.load(os.path.join(args.run, ".hydra/config.yaml"))
     field, _ = generate_field(GenConfig(**OmegaConf.to_container(cfg.data, resolve=True)), seed=cfg.seed)
+    # features are re-encoded from the snapshots, so feed the eye its own input (SOP 02 input_norm)
+    field_in = normalize_input(field, cfg.train.get("input_norm", "none"), int(art["t_fit"]))
     roles = [str(r) for r in art["roles"]]
     snaps = art["masks_snap"].astype(np.float32)                    # [n,K,V,H,W]
     name = os.path.basename(os.path.normpath(args.run))
@@ -183,7 +185,7 @@ def main() -> None:
 
     if args.only in (None, "training"):
         p = os.path.join(args.out, f"{name}_training.gif")
-        training_gif(field, snaps, art["snap_steps"], roles, int(art["t_fit"]), args.win, p, fps=3)
+        training_gif(field_in, snaps, art["snap_steps"], roles, int(art["t_fit"]), args.win, p, fps=3)
         print(f"[viz] wrote {p}")
     if args.only in (None, "state"):
         p = os.path.join(args.out, f"{name}_state.gif")

@@ -319,6 +319,26 @@ def generate_field(cfg: GenConfig = GenConfig(), seed: int = 0):
     return field, truth
 
 
+def normalize_input(field: np.ndarray, mode: str = "none", t_fit: int | None = None) -> np.ndarray:
+    """What the eye-lobe SEES (SOP 02, `train.input_norm`). Statistics from the training slice only.
+
+    none       : the generator's field (each variable standardized globally; cells keep their loudness).
+    cell_z     : every cell z-scored -> equal loudness per cell, but the time mean (= the stationary mode,
+                 rev3) is removed, so a flat channel has nothing left to read.
+    cell_scale : every cell divided by its temporal std -> equal loudness, time mean kept.
+    Both cell modes lift pure-noise cells (std ~ obs_noise) to unit variance -- the price of equal weighting.
+    """
+    if mode in (None, "none"):
+        return field
+    ref = field[: (t_fit or len(field))]
+    sd = ref.std(axis=0, keepdims=True) + 1e-8
+    if mode == "cell_z":
+        return ((field - ref.mean(axis=0, keepdims=True)) / sd).astype(field.dtype)
+    if mode == "cell_scale":
+        return (field / sd).astype(field.dtype)
+    raise ValueError(f"unknown input_norm {mode!r}")
+
+
 if __name__ == "__main__":
     f, t = generate_field()
     print("field", f.shape, f.dtype, "| modes:", t["K_modes"],
