@@ -1201,3 +1201,35 @@ signal_rank,cell_maps,score_trained}.py`; figures `.tmps/k_sweep/{mode_sweep,cel
    run, cyclic 3-15 (fewer than assigned), obedience 0.72-0.83.
 5. Consequence: R²/C tests sufficiency only when eyes are scarce (K < D); it never tests meaningfulness (families,
    stability). The M=10 testbed cannot rank observers by reconstruction.
+
+---
+
+### F-27. Multi-scenario for the whole family: fan width follows a predefined certainty score, honest in every family (2026-10-02)
+
+Protocol SOP 04 "multi-scenario for the whole family": `hf.ensemble.families=all` (scenarios + fair CRPS on every
+channel), `hf.ensemble.spread_from=score` (certainty score = held-out RMSE per channel x lead on `[7750,8000)`; each
+channel's spread set equal to it). Long-series split (train `[0,8000)`, fit `[0,7750)`, validation `[8000,10000)`),
+encoders `.tmps/runs/hf10k_rb_enc_seed{0..4}`, runs `.tmps/runs_hf/rb10k_all_seed{0..4}`, reference = chaotic-only
+multi-scenario (F-23 rerun `rb10k_ens_seed*`), 5 seeds x 1937 launches, 32 members. Outputs
+`.tmps/eval_hf/rb10k_all_vs_chaotic/` (`summary.txt`, `hf_ens.png`); per-family readout `.tmps/runs_hf/diag_all_families.py`.
+Training-std units; per family, pooled over its channels:
+
+| family | quantity | h1 | h4 | h8 | h16 | h64 |
+|---|---|---|---|---|---|---|
+| stationary (3 seeds) | certainty score / validation spread / validation RMSE | .079/.079/.102 | .089/.089/.102 | .125/.123/.120 | .248/.254/.241 | .833/.856/.791 |
+| cyclic | certainty score / validation spread / validation RMSE | .047/.059/.062 | .072/.083/.091 | .117/.138/.153 | .178/.220/.257 | .260/.318/.342 |
+| chaotic | certainty score / validation spread / validation RMSE | .069/.071/.069 | .180/.191/.177 | .440/.471/.407 | .617/.655/.587 | .839/.851/.822 |
+| spread-skill corr | stationary / cyclic / chaotic | +.15/+.59/+.31 | +.12/+.45/+.45 | +.13/+.49/+.52 | +.29/+.55/+.48 | +.07/+.62/+.39 |
+
+1. **The user's rule holds:** a certain history gets a narrow fan, an uncertain one a wide fan — at h8 the spread is
+   0.12 (stationary), 0.14 (cyclic), 0.47 (chaotic). The held-out score transfers to validation almost exactly.
+2. **Honest uncertainty in every family:** spread/error 0.77-1.08 (stationary; weakest at h1, 0.77), 0.77-0.95 (cyclic),
+   1.03-1.16 (chaotic). The fan also reacts to the situation within a family (spread-skill corr up to +0.62 cyclic,
+   +0.52 chaotic; weak for stationary). Members keep realistic amplitude (0.99-1.18).
+3. **Gain vs chaotic-only:** CRPS stationary h8 0.065 vs 0.110, cyclic h8 0.073 vs 0.109 (-25 to -41 % at every lead);
+   their best estimate equal or better (cyclic h64 0.283 vs 0.297, stationary h8 0.119 vs 0.145) except stationary h64
+   (0.778 vs 0.729).
+4. **Cost:** the chaotic best estimate loses short-lead precision — RMSE h1 0.067 vs 0.059, h8 0.388 vs 0.346, h16 0.567
+   vs 0.535; CRPS h8 0.174 vs 0.144; equal or better from h32 (h64 RMSE 0.800 vs 0.812, CRPS 0.427 vs 0.444). Likely
+   cause (untested): the scenario generator now spreads its capacity over 16 channels instead of the chaotic ones.
+5. Causality exact (max diff 0.0) on all seeds; F-23 checkpoints reload unchanged (per-lead `spread` broadcast to [A,K]).

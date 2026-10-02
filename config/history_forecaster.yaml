@@ -1,11 +1,11 @@
-# VENN module 2 — HISTORY FORECASTER, the "prefrontal cortex" (SOP 04). Every hyperparameter lives here (D-014).
+# VENN module 2 — HISTORY FORECASTER, the "prefrontal cortex" (latent emulator, SOP 04). Every hyperparameter lives here (D-014).
 #   python -m src.train.train_history_forecaster hf.encoder_run=.tmps/runs/hf_enc_seed0
 defaults:
   - config              # inherit seed / device from the encoder config
   - _self_
 
 hf:
-  encoder_run: null     # frozen eye-lobe run dir holding artifacts.npz (required)
+  encoder_run: null     # frozen eye-hippocampus run dir holding artifacts.npz (required)
   t_tr: 2000            # training set = [0, t_tr); validation set = [t_tr, T). Must equal the encoder's t_train
   t_fit: null           # targets used for fitting are < t_fit. null = t_tr (final run).
                         # t_fit = 1750 -> DEVELOPMENT run: hyperparameters judged on [1750, 2000), never on validation
@@ -33,6 +33,15 @@ hf:
   ensemble:
     enable: false       # false = deterministic model (reproduces F-21). true = noise-driven ensemble head on the
                         # channels labelled CHAOTIC on the fitting range; stationary/cyclic stay deterministic
+    mode: multi_scenario  # multi_scenario = MULTI-SCENARIO mode (default, F-22/F-23): the predictor reads the
+                        # history once and writes M scenarios for the CHAOTIC channels (CRPS-trained); stationary/
+                        # cyclic keep one forecast. memory = REJECTED (user 2026-10-02): chaotic-memory ensemble,
+                        # spread collapsed (SOP 04). "output" = old name of multi_scenario (still accepted)
+    families: chaotic   # which channels get scenarios: chaotic (F-22/F-23) | all = multi-scenario for the WHOLE
+                        # family (user 2026-10-02), fair CRPS on every channel
+    spread_from: crps   # how the scenario width is set after training on [t_fit, t_tr): crps = per-lead factor
+                        # minimizing chaotic CRPS (F-22/F-23) | score = predefined CERTAINTY SCORE, i.e. the
+                        # held-out RMSE per channel x lead; each channel's spread is made equal to it (SOP 04)
     members: 8          # members per launch during training (fair CRPS is unbiased for any M >= 2)
     noise_dim: 16       # size of the per-member noise vector eps
     lambda_crps: 1.0    # weight of the chaotic-channel CRPS against the non-chaotic MSE

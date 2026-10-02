@@ -38,17 +38,20 @@ COL = {"stationary": "#7a7a7a", "cyclic": "#1f77b4", "chaotic": "#d62728"}
 
 
 def load_run(run: str, device: str):
-    """Rebuild the frozen forecaster + its train-only normalization + the eye-lobe artifacts it was fitted on."""
+    """Rebuild the frozen forecaster + its train-only normalization + the eye-hippocampus artifacts it was fitted on."""
     ck = torch.load(os.path.join(run, "model.pt"), map_location=device, weights_only=False)
     c = ck["cfg"]
     nm = np.load(os.path.join(run, "norm.npz"))
     ens = "chaos" in ck["state"]                                       # ensemble model <=> it holds a chaos mask
     model = HistoryForecaster(ck["K"], leads=c["leads"], d=c["d"], layers=c["layers"], heads=c["heads"],
                               dropout=c["dropout"], chaos_mask=nm["chaos"] if ens else None,
-                              noise_dim=int(c["ensemble"]["noise_dim"]) if ens else 16).to(device)
+                              noise_dim=int(c["ensemble"]["noise_dim"]) if ens else 16,
+                              mode=str(c["ensemble"].get("mode", "multi_scenario")) if ens else "multi_scenario").to(device)
     state = ck["state"]
     if ens and "spread" not in state:                                  # runs saved before spread calibration existed
-        state = {**state, "spread": torch.ones(c["leads"])}
+        state = {**state, "spread": torch.ones(c["leads"], ck["K"])}
+    elif ens and state["spread"].dim() == 1:                           # per-lead buffer [A] of older runs -> [A, K]
+        state = {**state, "spread": state["spread"][:, None].expand(-1, ck["K"]).contiguous()}
     model.load_state_dict(state)
     model.eval()
     art = np.load(os.path.join(ck["encoder_run"], "artifacts.npz"))

@@ -844,8 +844,11 @@ Currently t_tr = 1400, T = 2000 (the existing split).
 **Date:** 2026-09-29. **Source:** user rulings in the `history-forecastor` session (progress.md narrative
 2026-09-29), signed off by the user ("yes, record D-031 and F-21"). Refines D-012 and D-030. Spec: SOP 04.
 
-- **Three parts, brain analogy.** (1) eye-lobe = encoder / observer (module 1); (2) **prefrontal cortex = history
-  forecaster** (module 2); (3) unconscious memory = mapping, reconstruction, data assimilation (module 3). All three
+- **Three parts, brain analogy** (naming fixed by the user 2026-10-01): (1) **encoder = eye-hippocampus = observer**
+  (module 1); (2) **latent emulator = prefrontal cortex = history predictor** (module 2, this decision); (3) **decoder
+  = cerebellum = memory interpreter** (module 3: mapping, reconstruction, data assimilation). Superseded names:
+  "eye-lobe" for the encoder, "unconscious memory" for the decoder, and an intermediate draft (same day) that called
+  module 2 the "hippocampus" and module 3 the "prefrontal cortex". All three
   are trained on ONE series of the dynamical system (here pseudo-SSH/SST), then frozen.
 - **History = the observer-captured trajectory** `psi_0..psi_t` (all K channels). The forecaster takes NO input
   beyond it: it reads the history and predicts `psi_{t+1}` (primary) and, as a "how far" readout, `psi_{t+a}` up to
@@ -2077,7 +2080,7 @@ MIXTURES of modes rather than pure family members.
 
 ---
 
-## SOP 04 — History Forecaster (module 2, "prefrontal cortex")
+## SOP 04 — History Forecaster (module 2: latent emulator = prefrontal cortex = history predictor)
 
 > Golden Rule: update this SOP BEFORE changing `src/models/history_forecaster.py`,
 > `src/train/train_history_forecaster.py` or `src/probes/eval_history_forecaster.py`.
@@ -2088,9 +2091,9 @@ MIXTURES of modes rather than pure family members.
 
 | part | brain analogue | VENN module | job |
 |---|---|---|---|
-| (1) | eye-lobe | encoder / observer (SOP 02) | field `x_t` -> latent state `psi_t` (K=16 scalars) |
-| (2) | **prefrontal cortex** | **history forecaster (this SOP)** | history `psi_0..psi_t` -> `psi_{t+1}` |
-| (3) | unconscious memory | mapping / reconstruction / data assimilation | `psi` <-> field |
+| (1) | eye-hippocampus | encoder / observer (SOP 02) | field `x_t` -> latent state `psi_t` (K=16 scalars) |
+| (2) | **prefrontal cortex** | **latent emulator / history predictor (this SOP)** | history `psi_0..psi_t` -> `psi_{t+1}` |
+| (3) | cerebellum | decoder / memory interpreter: mapping, reconstruction, data assimilation | `psi` <-> field |
 
 All three parts are trained on ONE series of the dynamical system (here pseudo-SSH/SST). Weights are then
 frozen (D-030).
@@ -2101,7 +2104,7 @@ One LONG pseudo-ocean field of the same system, cut into two equal halves:
 
 | set | time steps | used for |
 |---|---|---|
-| **training** | `[0, 2000)` | eye-lobe masks (SOP 02, `train.t_train=2000`), forecaster weights, standardization stats, channel family labels, hidden-mode readout |
+| **training** | `[0, 2000)` | eye-hippocampus masks (SOP 02, `train.t_train=2000`), forecaster weights, standardization stats, channel family labels, hidden-mode readout |
 | **validation** | `[2000, 4000)` | scoring only — no statistic, gradient or hyperparameter choice ever touches it |
 
 Why: the question "can the prefrontal cortex forecast?" is only answered on days it never saw, from a history that
@@ -2129,7 +2132,7 @@ training series `[0, t_tr)` = `[0, 2000)`, then grows by appending each newly ob
 ### Data schema
 
 ```
-upstream (frozen eye-lobe, SOP 02 with data.T=4000, train.t_train = t_tr = 2000):
+upstream (frozen eye-hippocampus, SOP 02 with data.T=4000, train.t_train = t_tr = 2000):
   artifacts.npz : S [T=4000, K=16]  (encoded over the FULL record; masks learned on [0, t_tr) only)
 
 standardize per channel with TRAIN-ONLY stats (channel std spans ~10 .. ~1000):
@@ -2243,3 +2246,81 @@ training trajectory. Same system, same generator seed, 4x longer training record
 - Forecasters: deterministic `hf.t_tr=8000` (fit `[0,8000)`); ensemble `hf.t_tr=8000 hf.t_fit=7750` (spread
   calibration on `[7750,8000)`, the same 250-step held-out slice as before). All other hyperparameters unchanged, so
   the only change against F-21/F-22 is the training length.
+
+#### Standardization stays inside the history predictor (user ruling, 2026-10-01)
+
+Question raised by the user: the history comes out of the observer in raw latent units (`S`, levels up to ~-1247,
+stds 19-364), while the prefrontal cortex reads and forecasts `z = (S - mu)/sd` (training stats, `norm.npz`) and hands
+`S_hat = mu + sd z_hat` to the cerebellum, which rescales with its own statistics. The map is affine and invertible
+(corr(raw, z) = 1.000 per channel, shapes identical), but it weights every channel equally and inflates the ~5 %
+wobble of the stationary channels to unit variance. Options offered: move the standardization into the observer, or
+let the forecaster read the raw history; and whether stationary channels should keep their level.
+**Ruling: keep the current standardization** -- per-channel z-score inside the history predictor, stationary channels
+scaled by their std like the others. All reported RMSE/CRPS stay in z units (1 = one training std of the channel).
+
+#### Chaotic-memory ensemble: the uncertainty comes FROM the chaotic history (`hf.ensemble.mode: memory`, user 2026-10-02)
+
+Why (user): weather-style initial-condition perturbation does not fit this configuration — (1) random (even Gaussian)
+noise is not a good perturbation; (2) the model holds a history memory, so it is unclear where a perturbation would
+go; (3) restricting the spread to the chaotic OUTPUT channels is arbitrary. The user's idea: the system's history and
+memory contain the chaotic signal, and that is where the ambiguity comes from. Hold the chaotic history SOFTLY (a
+learned noise-ensemble technique is fine there) and build the ensemble from it: each member is one plausible reading of
+the ambiguous chaotic past; the ensemble represents the uncertainty, it is not a perturbation of the initial condition.
+
+Contrast with the multi-scenario mode `mode: multi_scenario` (formerly `output`; F-22/F-23, the kept design): there the noise enters AFTER the history is read and is
+masked onto the chaotic OUTPUT channels. In `mode: memory` it enters the MEMORY (the token embeddings attention reads),
+only through the chaotic part, and the spread reaches EVERY output channel as far as its future depends on the chaotic past.
+
+```
+token_t     = inp_nc([z_t, dz_t] * (1 - c))  +  inp_c([z_t, dz_t] * c)          exact non-chaotic part + chaotic part
+sigma_t     = softplus(W_s [z_t, dz_t] * c + b_s)             [d]   how loosely the chaotic memory is held at step t,
+                                                                     learned from the CHAOTIC history only
+token_t^m   = token_t + sigma_t * g(eps_m)                    eps_m ~ N(0, I_noise_dim): ONE code per member, shared by
+                                                                     every past step = one coherent hypothesis of the past
+h_t^m       = causal-attention(token_0^m ... token_t^m)       the same blocks read each member's memory
+member_m    = z_t + head(h_t^m)                               [A,K]  all channels, same direct heads as the deterministic model
+```
+
+- `members = 0` -> no variation (eps = 0): the deterministic forecast, used by the causality check.
+- Loss (user choice): fair CRPS on the CHAOTIC channels + MSE on the non-chaotic channels averaged over EVERY member
+  (= MSE of the mean + member variance), so stationary/cyclic channels spread only where it lowers their error.
+- Spread calibration unchanged (per-lead `spread` buffer, fitted on chaotic-channel CRPS over `[t_fit, t_tr)`), applied
+  around the member mean on ALL channels.
+- `b_s` initialized at -3 (sigma ~ 0.05): the model starts as the deterministic forecaster and learns how loose to be.
+- Cost: attention runs once per member (M=8 in training) -> ~8x the deterministic training time.
+- Readout: same probe, same launches; compared against `mode: multi_scenario` (F-23 runs) and the deterministic twin. New
+  check: spread/error on the NON-chaotic channels (no longer 0 by construction).
+
+**Status: REJECTED (user 2026-10-02).** First run (`.tmps/runs_hf/rb10k_mem_seed{0..4}`): the memory IS shifted
+(|sigma*code| ~0.19-0.27 vs |token| ~1.4) but the forecaster learned to ignore it; raw member std 0.002-0.008, the
+calibration hit its x6 ceiling, chaotic spread/error 0.04-0.09, chaotic RMSE h8 0.466 vs 0.346 (multi-scenario).
+User's clarification of the intended idea: the uncertainty is generated by the CHAOTIC signal — when the predictor
+reads the memory it should output multiple scenarios for the chaotic prediction. That is the multi-scenario mode,
+which is kept as the design. Its spread is state-dependent: corr(member spread, |error|) over validation launches
++0.33 (h1) / +0.57 (h8) / +0.39 (h64); seed 0 h8: |error| 0.07 where the scenarios agree most (lowest 20 % spread)
+vs 0.50 where they disagree most. The `memory` code path is kept only to reproduce this record.
+
+#### Naming: `output` mode -> MULTI-SCENARIO mode (user 2026-10-02)
+
+`hf.ensemble.mode: multi_scenario` (default) is the ensemble of F-22/F-23, formerly `output`. The old name is still
+accepted when loading, so existing checkpoints reload unchanged.
+
+#### Multi-scenario for the WHOLE family, spread set by a predefined certainty score (user 2026-10-02)
+
+Why (user): make scenarios for every family, and let a predefined score say how likely the prediction is — e.g. a
+stationary history predicted a few steps ahead is quite certain -> small spread; chaotic memory makes the next
+prediction uncertain -> bigger spread. User choices: score = held-out error per CHANNEL x LEAD (not per family, so it
+does not depend on the observer's labels); scenarios trained with fair CRPS on ALL channels.
+
+- `hf.ensemble.families: all` (default `chaotic` = F-22/F-23 unchanged): the multi-scenario mask covers all K channels,
+  so the generator writes scenarios for every channel; loss = fair CRPS on every channel (the MSE term is empty).
+- **Certainty score** `score[a, k]` = RMSE of the scenario MEAN at lead a, channel k, on launches whose targets lie in
+  the held-out end of the training set `[t_fit, t_tr)` = `[7750, 8000)`; saved as `score.npy` [A,K] with the run.
+- **Spread from the score** (`hf.ensemble.spread_from: score`; default `crps` = the per-lead grid of F-22/F-23): after
+  training, per lead and channel, `s[a, k] = score[a, k] / raw_spread[a, k]` (raw spread = finite-M corrected member
+  std on the same launches), clipped to [0.1, 50]; members are widened around their mean by `s[a, k]`. So on held-out
+  data each channel's spread equals its expected error at each lead: certain channels/leads -> narrow fan, uncertain
+  -> wide. The SHAPE of the scenarios (which situation gets more spread) stays learned from the history by CRPS.
+- `spread` buffer is now [A, K] (a per-lead [A] buffer from older runs is broadcast to [A, K] on load).
+- Readout: same probe and launches; compare with the chaotic-only multi-scenario ensemble (F-23 rerun): RMSE of the
+  mean and CRPS per family and lead, spread/error per family (now non-zero for every family), spread-skill correlation.

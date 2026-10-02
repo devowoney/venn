@@ -1,6 +1,6 @@
-"""Train the history forecaster (module 2, "prefrontal cortex", SOP 04) on the TRAINING set only.
+"""Train the history forecaster (module 2, "prefrontal cortex" = latent emulator, SOP 04) on the TRAINING set only.
 
-Input : a frozen eye-lobe run (artifacts.npz, S[T,K]); only S[:t_fit] ever reaches a gradient or a statistic.
+Input : a frozen eye-hippocampus run (artifacts.npz, S[T,K]); only S[:t_fit] ever reaches a gradient or a statistic.
 Output: model.pt + norm.npz (train-only mu/sd) + TensorBoard tb/, in the Hydra run dir .tmps/runs_hf/<stamp>/.
 
 Run:  python -m src.train.train_history_forecaster hf.encoder_run=.tmps/runs/hf_enc_seed0
@@ -73,8 +73,11 @@ def forecast_loss(model: HistoryForecaster, z: torch.Tensor, t0: int, t_fit: int
         return err.sum() / (m.sum() * z.shape[-1]).clamp_min(1.0)
     ens = model(z_in, members=members)                                 # [1,T,M,A,K]
     c = model.chaos                                                    # [K]
-    base = ens[:, :, 0]                                                # non-chaotic channels: identical members
-    mse = (((base - tgt) ** 2) * m * (1 - c)).sum() / (m.sum() * (1 - c).sum()).clamp_min(1.0)
+    # non-chaotic channels: MSE of EVERY member (= MSE of the mean + member variance). In mode "multi_scenario" the members
+    # are identical there, so this is the old base-forecast MSE; in mode "memory" it lets a reliable channel spread
+    # only where that lowers its error (SOP 04, user choice "CRPS chaotic + MSE others")
+    sq = ((ens - tgt[:, :, None]) ** 2).mean(2)                        # [1,T,A,K] averaged over members
+    mse = (sq * m * (1 - c)).sum() / (m.sum() * (1 - c).sum()).clamp_min(1.0)
     crps = fair_crps(ens.permute(0, 1, 3, 4, 2), tgt)                  # [1,T,A,K]
     crps = (crps * m * c).sum() / (m.sum() * c.sum()).clamp_min(1.0)
     return mse + lambda_crps * crps
@@ -105,6 +108,31 @@ def calibrate_spread(model: HistoryForecaster, z_all: torch.Tensor, t_fit: int, 
     return best
 
 
+@torch.no_grad()
+def calibrate_score(model: HistoryForecaster, z_all: torch.Tensor, t_fit: int, t_tr: int, members: int = 32,
+                    clip=(0.1, 50.0)):
+    """Spread from a predefined CERTAINTY SCORE (SOP 04 "multi-scenario for the whole family").
+
+    score[a, k] = RMSE of the scenario mean at lead a, channel k, on launches whose targets lie in the held-out
+    [t_fit, t_tr) -- how far off the prediction is expected to be. Each channel's scenarios are then widened (or
+    narrowed) per lead so that their spread equals that score: certain channel/lead -> small fan, uncertain -> wide.
+    Returns (s [A,K] factors, score [A,K]).
+    """
+    model.eval()
+    A = model.A
+    model.spread.fill_(1.0)
+    torch.manual_seed(0)
+    ens = model(z_all[None, :t_tr], members=members)[0]               # [t_tr,M,A,K]
+    L = torch.arange(t_fit - 1, t_tr - A, device=z_all.device)
+    e = ens[L]                                                         # [N,M,A,K]
+    idx = L[:, None] + torch.arange(1, A + 1, device=z_all.device)[None, :]
+    y = z_all[idx]                                                     # [N,A,K]
+    score = ((e.mean(1) - y) ** 2).mean(0).sqrt()                      # [A,K] expected error of the best estimate
+    raw = ((members + 1) / members * e.var(1).mean(0)).sqrt()          # [A,K] raw scenario spread
+    s = (score / raw.clamp_min(1e-6)).clamp(*clip)
+    return s.cpu().numpy(), score.cpu().numpy()
+
+
 @hydra.main(version_base=None, config_path="../../config", config_name="history_forecaster")
 def main(cfg: DictConfig) -> None:
     hf = cfg.hf
@@ -132,14 +160,21 @@ def main(cfg: DictConfig) -> None:
                       == "chaotic" for i in range(K)], dtype=np.float32)
     members = int(ens_cfg.members) if use_ens else 0
     lam = float(ens_cfg.lambda_crps) if use_ens else 0.0
-    np.savez("norm.npz", mu=mu, sd=sd, t_fit=t_fit, t_tr=t_tr, chaos=chaos)
+    chaos_label = chaos.copy()                                         # the family labels themselves, for the record
+    if use_ens and str(ens_cfg.get("families", "chaotic")) == "all":
+        # multi-scenario for the WHOLE family: every channel gets scenarios (and CRPS); the certainty score decides
+        # afterwards how wide each one is. `chaos` is the scenario MASK the model uses -- here all ones.
+        chaos = np.ones(K, dtype=np.float32)
+    np.savez("norm.npz", mu=mu, sd=sd, t_fit=t_fit, t_tr=t_tr, chaos=chaos, chaos_label=chaos_label)
     if use_ens:
-        print(f"[hf] ensemble ON: {int(chaos.sum())} chaotic channels {np.flatnonzero(chaos).tolist()} carry the "
-              f"uncertainty; M={members} members, noise_dim={int(ens_cfg.noise_dim)}")
+        print(f"[hf] ensemble ON: scenarios on {int(chaos.sum())} channels {np.flatnonzero(chaos).tolist()} "
+              f"(chaotic-labelled: {np.flatnonzero(chaos_label).tolist()}); M={members} members, "
+              f"noise_dim={int(ens_cfg.noise_dim)}")
     model = HistoryForecaster(K, leads=int(hf.leads), d=int(hf.d), layers=int(hf.layers),
                               heads=int(hf.heads), dropout=float(hf.dropout),
                               chaos_mask=chaos if use_ens else None,
-                              noise_dim=int(ens_cfg.noise_dim) if use_ens else 16).to(device)
+                              noise_dim=int(ens_cfg.noise_dim) if use_ens else 16,
+                              mode=str(ens_cfg.get("mode", "multi_scenario")) if use_ens else "multi_scenario").to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=float(hf.lr), weight_decay=float(hf.weight_decay))
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=int(hf.steps))
     writer = SummaryWriter(log_dir="tb")
@@ -179,11 +214,22 @@ def main(cfg: DictConfig) -> None:
 
     if use_ens and bool(ens_cfg.get("calibrate", False)):
         assert t_fit < t_tr, "spread calibration needs a held-out slice: set hf.t_fit < hf.t_tr"
-        s_a = calibrate_spread(model, z_all, t_fit, t_tr)
-        model.spread.copy_(torch.as_tensor(s_a, dtype=torch.float32))
-        np.save("spread.npy", s_a)
-        print(f"[hf] spread calibrated on [{t_fit},{t_tr}): s(h1)={s_a[0]:.2f} s(h8)={s_a[7]:.2f} "
-              f"s(h16)={s_a[15]:.2f} s(h64)={s_a[-1]:.2f}")
+        if str(ens_cfg.get("spread_from", "crps")) == "score":
+            # predefined certainty score per channel x lead -> each channel's own fan width (SOP 04)
+            s_ak, score = calibrate_score(model, z_all, t_fit, t_tr)
+            model.spread.copy_(torch.as_tensor(s_ak, dtype=torch.float32))
+            np.save("spread.npy", s_ak)
+            np.save("score.npy", score)
+            print(f"[hf] certainty score on [{t_fit},{t_tr}) (RMSE per channel x lead), mean over channels: "
+                  f"h1={score[0].mean():.3f} h8={score[7].mean():.3f} h16={score[15].mean():.3f} "
+                  f"h64={score[-1].mean():.3f} | spread factor median h1={np.median(s_ak[0]):.2f} "
+                  f"h64={np.median(s_ak[-1]):.2f}")
+        else:
+            s_a = calibrate_spread(model, z_all, t_fit, t_tr)
+            model.spread.copy_(torch.as_tensor(s_a[:, None], dtype=torch.float32).expand(-1, K))
+            np.save("spread.npy", s_a)
+            print(f"[hf] spread calibrated on [{t_fit},{t_tr}): s(h1)={s_a[0]:.2f} s(h8)={s_a[7]:.2f} "
+                  f"s(h16)={s_a[15]:.2f} s(h64)={s_a[-1]:.2f}")
     torch.save(dict(state=model.state_dict(), cfg=OmegaConf.to_container(hf, resolve=True), K=K,
                     encoder_run=run), "model.pt")
     json.dump(dict(final_loss=float(loss.detach()), t_fit=t_fit, t_tr=t_tr), open("metrics.json", "w"), indent=2)

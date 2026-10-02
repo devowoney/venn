@@ -1,6 +1,6 @@
-"""History forecaster — module 2, the emulator's "prefrontal cortex" (SOP 04).
+"""History forecaster — module 2, the emulator's "prefrontal cortex" (latent emulator, SOP 04).
 
-The eye-lobe (frozen encoder) turns each field snapshot into a latent state psi_t [K]. Everything observed so
+The eye-hippocampus (frozen encoder) turns each field snapshot into a latent state psi_t [K]. Everything observed so
 far, psi_0 ... psi_t, is the HISTORY of the system. This model holds no input and no state of its own beyond
 that history: it reads the history and says what the latent state will be at its end (t+1), and further on
 (t+a) as a readout of how far the history carries.
@@ -10,7 +10,7 @@ that history: it reads the history and says what the latent state will be at its
 Why each piece:
 - one token per time step with ALL K channels: the phase of a mode is spread over several channels (each mask
   sees it differently), so a single channel cannot tell a rising from a falling phase — the joint state can.
-- the token also carries the increment z_t - z_{t-1}, taken from the history itself: the eye-lobe is purely
+- the token also carries the increment z_t - z_{t-1}, taken from the history itself: the eye-hippocampus is purely
   spatial, so one snapshot holds no rate of change.
 - causal attention over the whole history = full sight; rotary positions make attention depend on the LAG
   between two states, not on absolute time, so the history can keep growing past the training length.
@@ -67,7 +67,7 @@ class HistoryForecaster(nn.Module):
     """
 
     def __init__(self, K: int, leads: int = 64, d: int = 64, layers: int = 3, heads: int = 4,
-                 dropout: float = 0.2, chaos_mask=None, noise_dim: int = 16):
+                 dropout: float = 0.2, chaos_mask=None, noise_dim: int = 16, mode: str = "multi_scenario"):
         super().__init__()
         self.K, self.A = K, leads
         self.inp = nn.Linear(2 * K, d)                                 # token = [state, increment]
@@ -80,22 +80,46 @@ class HistoryForecaster(nn.Module):
         # given. It turns (history summary h_t, noise eps) into a member-specific departure from the base
         # forecast, and the mask zeroes it on every non-chaotic channel, which therefore stay deterministic.
         self.ensemble = chaos_mask is not None
+        mode = "multi_scenario" if mode == "output" else mode          # "output" = old name (F-22/F-23 checkpoints)
+        self.mode = mode if self.ensemble else None
         if self.ensemble:
+            assert mode in ("multi_scenario", "memory"), mode
             self.noise_dim = noise_dim
             self.register_buffer("chaos", torch.as_tensor(chaos_mask, dtype=torch.float32))   # [K] 1 = chaotic
-            self.gen = nn.Sequential(nn.Linear(d + noise_dim, 2 * d), nn.GELU(), nn.Linear(2 * d, 2 * d),
-                                     nn.GELU(), nn.Linear(2 * d, leads * K))
+            if mode == "multi_scenario":
+                # MULTI-SCENARIO mode (default, F-22/F-23): the predictor reads the history once, then writes M
+                # scenarios for the chaotic channels; each draw only asks "another scenario", the scenarios' shape is
+                # learned from the chaotic history (CRPS). Stationary/cyclic channels keep a single forecast.
+                self.gen = nn.Sequential(nn.Linear(d + noise_dim, 2 * d), nn.GELU(), nn.Linear(2 * d, 2 * d),
+                                         nn.GELU(), nn.Linear(2 * d, leads * K))
+            else:
+                # REJECTED (user 2026-10-02; kept only to reproduce the record): chaotic-MEMORY ensemble (SOP 04).
+                # The forecaster learned to ignore the memory shift -> spread collapsed (spread/error 0.04-0.09).
+                # The uncertainty comes from the chaotic HISTORY. sigma_t says how
+                # loosely the memory is held at each past step and is computed from the chaotic part of the token
+                # only; `code` turns a member's draw into a direction in token space. Their product shifts the memory
+                # the attention reads, so every output channel spreads as far as it depends on the chaotic past.
+                self.sigma = nn.Linear(2 * K, d)
+                nn.init.zeros_(self.sigma.weight)
+                nn.init.constant_(self.sigma.bias, -3.0)               # softplus(-3) ~ 0.05: start near deterministic
+                self.code = nn.Sequential(nn.Linear(noise_dim, d), nn.GELU(), nn.Linear(d, d))
             # per-lead spread inflation, fitted AFTER training on held-out data (SOP 04 "spread calibration");
             # 1 = raw ensemble. Trained on one trajectory, the raw ensemble is overconfident on unseen days.
-            self.register_buffer("spread", torch.ones(leads))
+            # [A, K]: one factor per lead AND channel, so the certainty score can give each channel its own fan width
+            # (SOP 04 "multi-scenario for the whole family"); the per-lead calibration fills every channel alike.
+            self.register_buffer("spread", torch.ones(leads, K))
 
     def forward(self, z: torch.Tensor, members: int = 0) -> torch.Tensor:
         """members = 0: deterministic forecast [B,T,A,K]. members = M > 0 (ensemble model only): M possible
-        futures [B,T,M,A,K]; non-chaotic channels are identical in every member (= the base forecast)."""
+        futures [B,T,M,A,K]. mode "multi_scenario": non-chaotic channels identical in every member. mode "memory" (REJECTED): every
+        member reads its own soft version of the chaotic memory, so any channel may spread."""
         B, T, K = z.shape
         dz = torch.cat([torch.zeros_like(z[:, :1]), z[:, 1:] - z[:, :-1]], dim=1)   # rate of change
-        x = self.inp(torch.cat([z, dz], dim=-1))
+        zd = torch.cat([z, dz], dim=-1)                                # [B,T,2K] token input
+        x = self.inp(zd)
         pos = torch.arange(T, device=z.device)
+        if members > 0 and self.mode == "memory":
+            return self._memory_members(z, zd, x, pos, members)
         for blk in self.blocks:
             x = blk(x, pos)
         h = self.norm(x)                                               # [B,T,d] summary of the history at t
@@ -109,5 +133,21 @@ class HistoryForecaster(nn.Module):
         dev = self.gen(torch.cat([hm, eps], dim=-1)).view(B, T, members, self.A, K)
         # calibration: widen the members around their own mean (the best estimate itself is not moved)
         dm = dev.mean(2, keepdim=True)
-        dev = dm + self.spread[:, None] * (dev - dm)
+        dev = dm + self.spread * (dev - dm)
         return base[:, :, None] + dev * self.chaos                     # chaos mask: only chaotic channels spread
+
+    def _memory_members(self, z, zd, x, pos, members: int) -> torch.Tensor:
+        """Chaotic-memory ensemble: M soft readings of the chaotic history -> M forecasts of every channel."""
+        B, T, K = z.shape
+        c2 = torch.cat([self.chaos, self.chaos])                       # [2K] chaotic part of [z, dz]
+        sig = F.softplus(self.sigma(zd * c2))                          # [B,T,d] looseness, from the CHAOTIC history only
+        eps = torch.randn(B, members, self.noise_dim, device=z.device) # ONE code per member, shared by every past step
+        u = self.code(eps)                                             # [B,M,d] the member's hypothesis direction
+        xm = (x[:, None] + sig[:, None] * u[:, :, None, :]).reshape(B * members, T, -1)   # [B*M,T,d] member memories
+        for blk in self.blocks:
+            xm = blk(xm, pos)
+        delta = self.head(self.norm(xm)).view(B, members, T, self.A, K).permute(0, 2, 1, 3, 4)   # [B,T,M,A,K]
+        # calibration: widen the members around their own mean on every channel (the best estimate is not moved)
+        dm = delta.mean(2, keepdim=True)
+        delta = dm + self.spread * (delta - dm)
+        return z[:, :, None, None, :] + delta
