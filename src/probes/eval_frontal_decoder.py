@@ -40,10 +40,11 @@ from matplotlib.colors import LinearSegmentedColormap      # noqa: E402
 
 from src.data.synthetic import GenConfig, generate_field   # noqa: E402
 from src.models.frontal_decoder import FrontalDecoder, lag_window   # noqa: E402
-from src.probes.eval_history_forecaster import load_run as load_hf   # noqa: E402
+from src.probes.eval_history_forecaster import channel_families, load_run as load_hf   # noqa: E402
 from src.train.fit_frontal_decoder import load_eye          # noqa: E402
 
 METHODS = ("decoded_truth", "forecast", "persistence", "climatology")
+FAMS = ("stationary", "cyclic", "chaotic")                     # latent channel families (labelled on the training half)
 COL = dict(decoded_truth="#8c8b86", forecast="#2a78d6", persistence="#1baf7a", climatology="#eda100")
 LABEL = dict(decoded_truth="decoded TRUE latent (decoding ceiling)", forecast="hippocampus -> frontal decoder (member mean)",
              persistence="persistence x(t)", climatology="climatology")
@@ -125,13 +126,20 @@ def eval_pair(dec_run: str, hf_run: str, device: str, members: int = 32) -> tupl
     rmse = {m: np.zeros(A) for m in METHODS}
     rmse_var = {m: np.zeros((A, shape[0])) for m in METHODS}
     per_var = {m: np.zeros((A, shape[0])) for m in ("forecast", "decoded_truth")}
-    unc = dict(spread=np.zeros(A), rmse=np.zeros(A), ratio=np.zeros(A), map_corr=np.zeros(A))
+    unc = dict(spread=np.zeros(A), rmse=np.zeros(A), ratio=np.zeros(A), map_corr=np.zeros(A), spread_field=np.zeros(A))
+    # latent family of each channel, labelled on the TRAINING half; the whole-family ensemble (F-27) spreads all of
+    # them, so the field spread is split by the family whose channels produced it (exact: the decoder is linear)
+    fams = channel_families(S.cpu().numpy(), t_tr)
+    fam_mask = {f: torch.tensor([x == f for x in fams] * len(dec.lags), device=device, dtype=torch.float32)
+                for f in FAMS}
+    spread_fam = {f: np.zeros(A) for f in FAMS}
     t0 = int(L[len(L) // 3])                                   # one launch for the snapshot figure
     j0 = len(L) // 3
     snap = dict(t0=t0, leads=list(LEADS_SHOW), truth=[], m1=[], m2=[], mean=[], spread=[])
     for a in range(1, A + 1):
         y = Yb[L + a]                                          # [n,N] observed truth (balanced)
-        fe = dec(forecast_window(Sf, Shat, L, a, dec.lags), balanced=True).reshape(len(L), M, N)  # field members
+        win = forecast_window(Sf, Shat, L, a, dec.lags)       # [n,M,F] one latent window per member
+        fe = dec(win, balanced=True).reshape(len(L), M, N)     # field members
         mean = fe.mean(1)
         preds = dict(decoded_truth=dec(win_true[L + a], balanced=True).reshape(len(L), N), forecast=mean,
                      persistence=Yb[L], climatology=torch.zeros_like(y))
@@ -154,6 +162,13 @@ def eval_pair(dec_run: str, hf_run: str, device: str, members: int = 32) -> tupl
             unc["ratio"][a - 1] = unc["spread"][a - 1] / unc["rmse"][a - 1]
             sp_map, er_map = var.mean(0).sqrt(), err2.mean(0).sqrt()
             unc["map_corr"][a - 1] = float(torch.corrcoef(torch.stack([sp_map, er_map]))[0, 1])
+            unc["spread_field"][a - 1] = float((var * dec.sd_y ** 2).mean().sqrt())   # field units, like the RMSE
+            dev = (win - win.mean(1, keepdim=True)) / dec.sd_s  # member deviations, standardized latent window
+            for f in FAMS:                                     # field spread produced by one family's channels
+                if fam_mask[f].any():
+                    df = ((dev * fam_mask[f]) @ dec.W) * dec.sd_y
+                    spread_fam[f][a - 1] = float((df.var(1) * (M + 1) / M).mean().sqrt())
+                    del df
         if a in LEADS_SHOW:                                    # physical units for the picture
             phys = lambda b: (dec.mu_y + dec.sd_y * b).reshape(shape).cpu().numpy()   # noqa: E731
             snap["truth"].append(phys(Fb[t0 + a]))
@@ -163,12 +178,17 @@ def eval_pair(dec_run: str, hf_run: str, device: str, members: int = 32) -> tupl
             snap["spread"].append((dec.sd_y * fe[j0].std(0)).reshape(shape).cpu().numpy() if M > 1
                                   else np.zeros(shape))
         del fe
-    chaos = nm["chaos"].astype(bool) if "chaos" in nm.files else np.zeros(Shat.shape[-1], bool)
-    nc = float(Shat[..., ~torch.as_tensor(chaos, device=device)].std(1).max()) if M > 1 else 0.0
+    # chaotic LABELS: `chaos_label` when the run has it (whole-family ensemble: `chaos` = scenario mask, all ones)
+    key = "chaos_label" if "chaos_label" in nm.files else "chaos"
+    chaos = nm[key].astype(bool) if key in nm.files else np.zeros(Shat.shape[-1], bool)
+    nonc = ~torch.as_tensor(chaos, device=device)
+    nc = float(Shat[..., nonc].std(1).max()) if (M > 1 and nonc.any()) else 0.0
     return dict(dec_run=os.path.relpath(dec_run), hf_run=hf_run, members=M, chaotic_channels=np.flatnonzero(chaos).tolist(),
+                families=fams, spread_family={f: v.tolist() for f, v in spread_fam.items()},
                 max_nonchaotic_latent_spread=nc, ceiling=ceil, n_launch=len(L),
                 rmse={m: v.tolist() for m, v in rmse.items()}, rmse_var={m: v.tolist() for m, v in rmse_var.items()},
-                obs_noise=obs_noise, r2c={m: v.tolist() for m, v in out.items()}, r2c_var={m: v.tolist() for m, v in per_var.items()},
+                obs_noise=obs_noise, r2c={m: v.tolist() for m, v in out.items()},
+                r2c_var={m: v.tolist() for m, v in per_var.items()},
                 uncertainty={k: v.tolist() for k, v in unc.items()}), snap
 
 

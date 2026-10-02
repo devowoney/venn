@@ -2314,6 +2314,10 @@ Per lead a = 1..64, validation launches only (all targets in `[t_tr, T)`):
 - uncertainty: field spread (std across members, finite-M corrected) / RMSE of the member mean, both against the
   NOISE-FREE state (same generator seed, obs_noise = 0): the members should cover the state's uncertainty, not the
   iid observation noise; ~1 = calibrated. Plus corr(spread map, error map) over cells = is the spread in the right place.
+- field spread BY FAMILY: the decoder is linear, so the member deviations of the stationary / cyclic / chaotic channels
+  (labelled on the training half, `channel_families`) are decoded separately -> RMS field spread each family
+  contributes. Needed since the whole-family multi-scenario ensemble (F-27, `families: all`) spreads every channel;
+  the family labels come from `norm.npz` `chaos_label` when present (there `chaos` is the scenario MASK, all ones).
 - figures: lead curves; snapshots (truth / member 1 / member 2 / member mean / member spread at leads 8, 64).
 - D-012's pseudo-inverse is no longer a reference (user: "we didn't need it").
 

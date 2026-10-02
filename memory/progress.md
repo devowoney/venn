@@ -6,6 +6,39 @@
 
 ## Log
 
+### 2026-10-02 — Memory interpreter on the NEW prefrontal-cortex ensemble (whole-family scenarios, F-27)
+
+- **User:** new ensemble implemented (history-forecastor `5010224`: `families: all`, `spread_from: score`); rerun the
+  last experiment and see what changes on the decoder and the final result. Naming used here (user, final): eye-hippocampus
+  = encoder, prefrontal cortex = history predictor, cerebellum = memory interpreter (this branch's code still says
+  "hippocampus"/"frontal"; D-033's names are superseded).
+- **Code:** SOP 05 first (field spread BY FAMILY; labels from `norm.npz` `chaos_label`), then `eval_frontal_decoder.py`
+  (`chaos_label`, per-family field spread, total spread in field units). New forecaster checkpoints need the
+  5010224 model code ([A,K] spread buffer) -> ephemeral combo tree `.tmps/combo/` (this branch's src + 5010224's
+  `history_forecaster.py` / `eval_history_forecaster.py`); no tracked file of either branch changed, no merge.
+- **Runs:** decoders `.tmps/runs_dec/dec10k_rb_seed*` on `hf10k_rb_enc_seed*` (val R^2/C identical to the hf10k
+  eyes); eval `.tmps/eval_dec/rb10k_all/` (new) and `rb10k_ens/` (chaotic-only, reproduces 2026-10-01 numbers
+  exactly); comparison `.tmps/eval_dec/rb10k_compare.png` (`.tmps/decoder_probe/{launch_rb.sh,compare_rb.py}`).
+- **Result (validation, 5-seed mean, field units):**
+  | lead | h1 | h2 | h4 | h8 | h16 | h32 | h64 |
+  | RMSE forecast, new | .061 | .065 | .076 | .118 | .171 | .232 | .236 |
+  | RMSE forecast, chaotic-only | .060 | .064 | .074 | .114 | .165 | .231 | .240 |
+  | RMSE persistence / climatology | .109/.548 | .166 | .267 | .390 | .544 | .762 | .767/.549 |
+  | field spread, new | .028 | .036 | .053 | .112 | .218 | .214 | .264 |
+  | field spread, chaotic-only | .018 | .023 | .035 | .073 | .124 | .187 | .227 |
+  | spread/error new / chaotic-only | .72/.44 | .81/.50 | .91/.59 | 1.03/.67 | 1.22/.75 | .93/.78 | 1.17/.95 |
+  | corr(spread map, error map) new / chaotic-only | .50/.28 | .67/.48 | .80/.73 | .89/.84 | .82/.83 | .90/.80 | .91/.78 |
+  New field spread by family: stationary .004-.048, cyclic .020 (h1) -> .043 (h8) -> .106 (h64), chaotic .019 -> .105
+  -> .235. RMSE of the best estimate unchanged (±.006); SSH slightly worse h4-h16 (.151 vs .144 at h8), SST better
+  h32-h64 (.169 vs .175). Calibration and placement improve at every lead; seed 3 still under (h8 .70), seed 1 over
+  at h16 (2.13).
+- **Spikes in the new field spread (h16-h64):** not the certainty factors (smooth, 2-6 % per lead) and not outlier
+  launches (latent chaotic spread smooth in both arms, worst launch ~3x median). Measured on seed 1: member deviations
+  CANCEL across overlapping channels when decoded (actual / independent-channel field spread 0.31-0.50 chaotic-only);
+  in the new ensemble that cancellation varies by lead (0.35-0.94; h16 0.413 vs 0.438 = no cancellation) -> spike.
+  (`.tmps/decoder_probe/{spike_check,coherence_check}.py`.)
+- **Recorded as F-28** with user sign-off ("just record it"). F-26 (first decoder result, 2026-10-01) still unrecorded.
+
 ### 2026-10-01 — Module 3 (frontal cortex / decoder) opened: branch `memory-intepreter`; information-hole probe
 
 - **User:** first stage of eye-lobe (observer) and hippocampus (predictor, = the history forecaster) done; build the

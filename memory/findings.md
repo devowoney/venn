@@ -1204,6 +1204,38 @@ signal_rank,cell_maps,score_trained}.py`; figures `.tmps/k_sweep/{mode_sweep,cel
 
 ---
 
+### F-28. Memory interpreter on the whole-family ensemble: same field RMSE, honest and better-placed field spread; spikes from cross-channel coherence (2026-10-02)
+
+Protocol SOP 05 (field spread by family added). Prefrontal cortex = history-forecastor `5010224` whole-family multi-scenario
+(F-27, `rb10k_all_seed*`) vs chaotic-only (F-23 rerun, `rb10k_ens_seed*`); eyes `hf10k_rb_enc_seed*` (M=10, K=16); decoders
+`.tmps/runs_dec/dec10k_rb_seed*` (lags [0], fit `[0,8000)`); validation `[8000,10000)`, 5 seeds x 1937 launches, 32 members,
+every member decoded. Outputs `.tmps/eval_dec/rb10k_{all,ens}/`, `.tmps/eval_dec/rb10k_compare.png`. Field units
+(each variable unit-std), 5-seed mean; spread / error vs the noise-free state:
+
+| lead | h1 | h2 | h4 | h8 | h16 | h32 | h64 |
+|---|---|---|---|---|---|---|---|
+| field RMSE, whole-family | .061 | .065 | .076 | .118 | .171 | .232 | .236 |
+| field RMSE, chaotic-only | .060 | .064 | .074 | .114 | .165 | .231 | .240 |
+| field RMSE, decoded true latent | .051 | .051 | .051 | .051 | .051 | .051 | .051 |
+| field RMSE, persistence / climatology | .109 / .548 | .166 | .267 | .390 | .544 | .762 | .767 / .549 |
+| field spread, whole-family / chaotic-only | .028 / .018 | .036 / .023 | .053 / .035 | .112 / .073 | .218 / .124 | .214 / .187 | .264 / .227 |
+| spread / error, whole-family / chaotic-only | .72 / .44 | .81 / .50 | .91 / .59 | 1.03 / .67 | 1.22 / .75 | .93 / .78 | 1.17 / .95 |
+| corr(spread map, error map), whole-family / chaotic-only | .50 / .28 | .67 / .48 | .80 / .73 | .89 / .84 | .82 / .83 | .90 / .80 | .91 / .78 |
+
+1. **Decoder unchanged, best estimate unchanged:** decoding stays at the noise floor (.051); member-mean field RMSE within
+   ±.006 of chaotic-only at every lead (SSH slightly worse h4-h16, h8 .151 vs .144; SST better h32-h64, h64 .169 vs .175).
+2. **Field uncertainty improves:** short-lead under-dispersion largely removed (h1 .44 -> .72, h8 .67 -> 1.03) — consistent
+   with the 2026-10-01 hypothesis that it came from non-chaotic channels carrying no spread. Placement better at every
+   lead except h16 (equal). Seed spread remains: seed 3 under (h8 .70), seed 1 over at h16 (2.13).
+3. **Who spreads the field (whole-family):** chaotic channels .019 / .105 / .235 (h1 / h8 / h64), cyclic .020 / .043 / .106
+   (a smooth, wide haze over the large cyclic patterns), stationary <= .048.
+4. **Lead-to-lead spikes of the field spread (h16-h64, whole-family):** not the certainty-score factors (smooth, 2-6 % per
+   lead) and not outlier launches (latent chaotic spread smooth in both arms, worst launch ~3x median). Seed 1: member
+   deviations cancel across overlapping channels when decoded — actual / independent-channel field spread 0.31-0.50
+   (chaotic-only) vs 0.35-0.94 (whole-family); at h16 0.413 vs 0.438 (no cancellation) = the spike. Interpretation
+   (untested): scenarios on all 16 channels are not always consistent with how overlapping eyes see the same pattern.
+   (`.tmps/decoder_probe/{spike_check,coherence_check}.py`.)
+
 ### F-27. Multi-scenario for the whole family: fan width follows a predefined certainty score, honest in every family (2026-10-02)
 
 Protocol SOP 04 "multi-scenario for the whole family": `hf.ensemble.families=all` (scenarios + fair CRPS on every
