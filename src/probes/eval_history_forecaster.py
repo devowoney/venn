@@ -143,9 +143,20 @@ def eval_one(run: str, device: str, members: int = 32) -> dict:
     skill, corr, amp = lead_scores(pred, truth, pers)
     # RMSE in standardized units (1 = one training-set standard deviation of that channel), per lead and channel.
     # CLIMATOLOGY = always forecast the training mean (0 in standardized units): the "knows nothing" reference.
-    rmse = np.sqrt(((pred - truth) ** 2).mean(0))                   # [A,K]
-    rmse_p = np.sqrt(((pers - truth) ** 2).mean(0))
-    rmse_c = np.sqrt((truth ** 2).mean(0))
+    # Units: the model works in ITS z (norm.npz `sd`, which `hf.stationary_scale: level` changes for stationary
+    # channels). Errors are reported in ONE unit shared by every run -- the channel's own training std -- and also as a
+    # fraction of the channel's SIGNAL SIZE sqrt(mean^2 + std^2), where a level-dominated channel shows how small its
+    # error really is (SOP 04, "level + leak").
+    sd_std = nm["sd_std"] if "sd_std" in nm.files else nm["sd"]     # runs before the flag: sd IS the own std
+    to_std = nm["sd"] / sd_std                                      # [K] z -> training-std units (1 unless rescaled)
+    size = np.sqrt(S[:t_tr].mean(0) ** 2 + S[:t_tr].std(0) ** 2)
+    to_size = nm["sd"] / size                                       # [K] z -> fraction of the signal size
+    err = np.sqrt(((pred - truth) ** 2).mean(0))                    # [A,K], model z units
+    rmse = err * to_std
+    rmse_p = np.sqrt(((pers - truth) ** 2).mean(0)) * to_std
+    rmse_c = np.sqrt((truth ** 2).mean(0)) * to_std
+    rmse_size, rmse_p_size, rmse_c_size = err * to_size, rmse_p / to_std * to_size, rmse_c / to_std * to_size
+    crps = crps * to_std
     half = len(L) // 2                                              # does a LONGER history help or hurt?
     sk_early = lead_scores(pred[:half], truth[:half], pers[:half])[0]
     sk_late = lead_scores(pred[half:], truth[half:], pers[half:])[0]
@@ -157,26 +168,37 @@ def eval_one(run: str, device: str, members: int = 32) -> dict:
     mode_fam = [str(f) for f in art["families"]]
     moving = amp_true.std(1) > 1e-9                                 # the constant mode has nothing to forecast
     Y = amp_true[moving].T                                          # [T,m]
-    X = np.concatenate([np.ones((T, 1)), z], 1)                     # [T,K+1]
+    X = np.concatenate([np.ones((T, 1)), z * to_std], 1)            # [T,K+1], std units: ridge blind to the scaling
     Xtr, Ytr = X[:t_tr], Y[:t_tr]
     Wr = np.linalg.solve(Xtr.T @ Xtr + 1e-3 * t_tr * np.eye(K + 1), Xtr.T @ Ytr)   # ridge, TRAINING set only
-    rd = lambda zz: np.concatenate([np.ones(zz.shape[:-1] + (1,)), zz], -1) @ Wr
+    rd = lambda zz: np.concatenate([np.ones(zz.shape[:-1] + (1,)), zz * to_std], -1) @ Wr
     m_pred, m_ceil, m_true = rd(pred), rd(truth), Y[idx]           # [N,A,m]
     mc_pred = lead_scores(m_pred, m_true, m_true)[1]                # corr [A,m]
     mc_ceil = lead_scores(m_ceil, m_true, m_true)[1]
 
     return dict(run=run, t_tr=t_tr, T=T, n_launch=len(L), causality_maxdiff=caus, fams=fams,
                 skill=skill, corr=corr, amp=amp, rmse=rmse, rmse_p=rmse_p, rmse_c=rmse_c,
+                rmse_size=rmse_size, rmse_p_size=rmse_p_size, rmse_c_size=rmse_c_size,
                 crps=crps, ratio=ratio, mamp=mamp, is_ens=bool(model.ensemble), L=L,
-                ens_ex=ens[:, :8] if ens.shape[1] > 1 else None, sk_early=sk_early, sk_late=sk_late, hor=horizon(corr),
+                ens_ex=ens[:, :8] * to_std if ens.shape[1] > 1 else None, sk_early=sk_early, sk_late=sk_late, hor=horizon(corr),
                 mode_fam=[f for f, m in zip(mode_fam, moving) if m], mode_corr=mc_pred, mode_ceil=mc_ceil,
-                z=z, zhat=zhat)
+                z=z * to_std, zhat=zhat * to_std,                     # plotted in training-std units
+                std_to_pct=100 * sd_std / size)                       # [K] std units -> deviation, % of signal size
 
 
 def fam_mean(r: dict, key: str, fam: str | None) -> np.ndarray:
     """[A] mean over the channels of one family (all channels if fam is None)."""
     sel = [i for i, f in enumerate(r["fams"]) if fam is None or f == fam]
     return r[key][:, sel].mean(1) if sel else np.full(r[key].shape[0], np.nan)
+
+
+def rmse_unit(fam: str):
+    """(key suffix, factor, axis label) for a family's RMSE panel. A stationary channel is a level + a small leak, so
+    it is judged against the level it sits on (% of signal size); in std units its leak is magnified to unit
+    variance and its error looks like it explodes (D-033)."""
+    if fam == "stationary":
+        return "_size", 100.0, "RMSE (% of signal size)"
+    return "", 1.0, "RMSE (training std units)"
 
 
 def main() -> None:
@@ -211,6 +233,19 @@ def main() -> None:
         for key, who in [("rmse", "model"), ("rmse_p", "persistence"), ("rmse_c", "climatology")]:
             v = np.array([fam_mean(r, key, fam) for r in R])
             lines.append(f"  {(fam or 'all') + ' ' + who:<20}" + "".join(f"  {np.nanmean(v[:, a - 1]):.3f}" for a in show))
+    lines.append("")
+    lines += ["RMSE as % of the channel's SIGNAL SIZE sqrt(mean^2 + std^2) on [0, t_tr) -- level included, so a flat",
+              "channel's error is judged against the level it sits on (SOP 04, 'level + leak')", ""]
+    lines.append(f"{'RMSE % of size':<22}" + "".join(f"  h{a:<5}" for a in show))
+    for fam in (None,) + FAMS:
+        for key, who in [("rmse_size", "model"), ("rmse_p_size", "persistence"), ("rmse_c_size", "climatology")]:
+            v = np.array([fam_mean(r, key, fam) for r in R]) * 100
+            lines.append(f"  {(fam or 'all') + ' ' + who:<20}" + "".join(f"  {np.nanmean(v[:, a - 1]):5.1f}" for a in show))
+    if Q:
+        for fam in FAMS:
+            v = np.array([fam_mean(r, "rmse_size", fam) for r in Q]) * 100
+            if not np.isnan(v).all():
+                lines.append(f"  {fam + ' ref':<20}" + "".join(f"  {np.nanmean(v[:, a - 1]):5.1f}" for a in show))
     lines.append("")
     for key, name in [("skill", "skill vs persistence"), ("corr", "corr"), ("amp", "amplitude")]:
         lines.append(f"{name:<22}" + "".join(f"  h{a:<5}" for a in show))
@@ -266,10 +301,11 @@ def main() -> None:
     gs = fig.add_gridspec(3, 3, hspace=0.42, wspace=0.25)
     for j, fam in enumerate(FAMS):
         ax = fig.add_subplot(gs[0, j])
+        suf, fac, ylab = rmse_unit(fam)
         for key, lab, sty in [("rmse", "history forecaster", dict(color=COL[fam], lw=2.2)),
                               ("rmse_p", "persistence (initial condition held)", dict(color="k", lw=1.4, ls="--")),
                               ("rmse_c", "climatology (training mean)", dict(color="0.55", lw=1.4, ls=":"))]:
-            v = np.array([fam_mean(r, key, fam) for r in R])
+            v = np.array([fam_mean(r, key + suf, fam) for r in R]) * fac
             if np.isnan(v).all():
                 continue
             ax.plot(leads, np.nanmean(v, 0), label=lab, **sty)
@@ -278,7 +314,7 @@ def main() -> None:
         n = sum(r["fams"].count(fam) for r in R)
         ax.set_title(f"RMSE — {fam} channels (n={n}, all seeds)")
         ax.set_xlabel("lead (steps ahead)")
-        ax.set_ylabel("RMSE (training std units)")
+        ax.set_ylabel(ylab)
         ax.set_xlim(1, A)
         ax.set_ylim(bottom=0)
         ax.legend(fontsize=8, loc="upper left")
@@ -339,6 +375,98 @@ def main() -> None:
     print(f"[eval] wrote {out}")
     if Q and R[0]["is_ens"]:
         ens_figure(R, Q, os.path.join(args.out, "hf_ens.png"))
+    if R[0]["is_ens"]:
+        fan_figure(R, os.path.join(args.out, "hf_fan.png"))
+
+
+def fan_figure(R: list, out: str) -> None:
+    """The three families' ensembles in ONE unit: deviation from the channel's level, % of its signal size (D-033).
+
+    In training-std units a stationary channel's ~4 % leak is magnified to unit variance and its fan looks as wide as a
+    chaotic one; against the level it sits on, a stable signal shows as what it is -- a narrow fan.
+    Row 1: fan charts, seed 0, one channel per family, three launches, shared y-axis; title = that channel's RMSE.
+    Row 2: per family over all seeds -- RMSE of the ensemble mean (values printed), spread, spread / error.
+    """
+    A = R[0]["rmse"].shape[0]
+    leads = np.arange(1, A + 1)
+    marks = [1, 8, 16, 64]
+    fam_ch = lambda r, fam: [i for i, f in enumerate(r["fams"]) if f == fam]
+
+    def per_fam(key: str, fam: str) -> np.ndarray:
+        """[A, n_channels] over all seeds; spread = (spread / error) x RMSE, both of the same channel."""
+        cols = []
+        for r in R:
+            c = fam_ch(r, fam)
+            if c:
+                v = r["rmse_size"][:, c] if key != "spread" else r["ratio"][:, c] * r["rmse_size"][:, c]
+                cols.append(v if key != "ratio" else r["ratio"][:, c])
+        return np.concatenate(cols, 1) if cols else np.full((A, 0), np.nan)
+
+    fig = plt.figure(figsize=(17, 10))
+    gs = fig.add_gridspec(2, 3, hspace=0.4, wspace=0.24)
+    r0 = R[0]
+    t_a = r0["t_tr"] + 300
+    ts = np.arange(t_a - 32, t_a + 3 * 80 + 16)
+    axes = []
+    for j, fam in enumerate(FAMS):
+        ax = fig.add_subplot(gs[0, j])
+        ch = fam_ch(r0, fam)
+        if not ch or r0["ens_ex"] is None:
+            ax.set_visible(False)
+            continue
+        k = ch[0]
+        c = r0["std_to_pct"][k]
+        ax.plot(ts, r0["z"][ts, k] * c, color="k", lw=1.1, label="truth")
+        for n_, t0 in enumerate(range(t_a, t_a + 3 * 80, 80)):
+            tt = t0 + leads
+            i0 = int(np.flatnonzero(r0["L"] == t0)[0])
+            for m in range(r0["ens_ex"].shape[1]):
+                ax.plot(tt, r0["ens_ex"][i0, m, :, k] * c, color=COL[fam], lw=0.6, alpha=0.45,
+                        label="ensemble members" if (n_ == 0 and m == 0) else None)
+            ax.plot(tt, r0["zhat"][t0, :, k] * c, color=COL[fam], lw=2.2, label="ensemble mean" if n_ == 0 else None)
+            ax.plot([t0], [r0["z"][t0, k] * c], "o", color="k", ms=5, label="initial condition" if n_ == 0 else None)
+        ax.axhline(0, color="0.6", ls=":", lw=1)
+        e = 100 * r0["rmse_size"][:, k]
+        ax.set_title(f"{fam}: seed 0 ch{k} — RMSE h1/h16/h64 = {e[0]:.1f} / {e[15]:.1f} / {e[63]:.1f} %", fontsize=10)
+        ax.set_xlabel("time step (validation)")
+        ax.set_ylabel("deviation from level, % of signal size")
+        ax.legend(fontsize=7, loc="lower left")
+        axes.append(ax)
+    if axes:
+        lo, hi = min(a.get_ylim()[0] for a in axes), max(a.get_ylim()[1] for a in axes)
+        for a in axes:
+            a.set_ylim(lo, hi)                                      # ONE scale for the three families
+
+    for j, (key, title, ylab) in enumerate([("rmse", "RMSE of the ensemble mean (all seeds)", "RMSE, % of signal size"),
+                                            ("spread", "ensemble spread (all seeds)", "spread, % of signal size"),
+                                            ("ratio", "spread / error (1 = honest uncertainty)", "spread / error")]):
+        ax = fig.add_subplot(gs[1, j])
+        txt = []
+        for fam in FAMS:
+            v = per_fam(key, fam) * (1 if key == "ratio" else 100)
+            if v.shape[1] == 0:
+                continue
+            ax.plot(leads, v.mean(1), color=COL[fam], lw=2.2, label=f"{fam} (n={v.shape[1]})")
+            ax.fill_between(leads, v.min(1), v.max(1), color=COL[fam], alpha=0.12)
+            if key == "rmse":
+                ax.plot(marks, v.mean(1)[np.array(marks) - 1], "o", color=COL[fam], ms=4)
+                txt.append(f"{fam:<10}" + "".join(f"{v.mean(1)[a - 1]:7.1f}" for a in marks))
+        if key == "ratio":
+            ax.axhline(1, color="k", ls=":", lw=0.8)
+        if txt:                                                     # the values, not only the curves
+            ax.text(0.98, 0.03, "% of size  " + "".join(f"{'h' + str(a):>7}" for a in marks) + "\n" + "\n".join(txt),
+                    transform=ax.transAxes, ha="right", va="bottom", family="monospace", fontsize=8,
+                    bbox=dict(facecolor="white", edgecolor="0.7", alpha=0.9))
+        ax.set_title(title, fontsize=11)
+        ax.set_xlabel("lead (steps ahead)")
+        ax.set_ylabel(ylab)
+        ax.set_xlim(1, A)
+        ax.set_ylim(bottom=0)
+        ax.legend(fontsize=8, loc="upper left")
+    fig.suptitle(f"Ensembles of the three families in ONE unit (deviation from the level, % of signal size) — "
+                 f"validation [{r0['t_tr']},{r0['T']}), {len(R)} seeds", fontsize=13)
+    fig.savefig(out, dpi=105, bbox_inches="tight")
+    print(f"[eval] wrote {out}")
 
 
 def ens_figure(R: list, Q: list, out: str) -> None:
@@ -350,15 +478,16 @@ def ens_figure(R: list, Q: list, out: str) -> None:
     # row 1: RMSE of the best estimate per family, ensemble mean vs deterministic reference
     for j, fam in enumerate(FAMS):
         ax = fig.add_subplot(gs[0, j])
+        suf, fac, ylab = rmse_unit(fam)
         for key, RR, lab, sty in [("rmse", R, "ensemble mean", dict(color=COL[fam], lw=2.2)),
                                   ("rmse", Q, "deterministic reference", dict(color=COL[fam], lw=1.4, ls="--")),
                                   ("rmse_p", R, "persistence", dict(color="k", lw=1.2, ls="--")),
                                   ("rmse_c", R, "climatology", dict(color="0.55", lw=1.2, ls=":"))]:
-            v = np.array([fam_mean(r, key, fam) for r in RR])
+            v = np.array([fam_mean(r, key + suf, fam) for r in RR]) * fac
             ax.plot(leads, np.nanmean(v, 0), label=lab, **sty)
         ax.set_title(f"RMSE of the best estimate — {fam}")
         ax.set_xlabel("lead (steps ahead)")
-        ax.set_ylabel("RMSE (training std units)")
+        ax.set_ylabel(ylab)
         ax.set_xlim(1, A)
         ax.set_ylim(bottom=0)
         ax.legend(fontsize=8, loc="upper left")

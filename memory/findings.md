@@ -1265,3 +1265,28 @@ Training-std units; per family, pooled over its channels:
    vs 0.535; CRPS h8 0.174 vs 0.144; equal or better from h32 (h64 RMSE 0.800 vs 0.812, CRPS 0.427 vs 0.444). Likely
    cause (untested): the scenario generator now spreads its capacity over 16 channels instead of the chaotic ones.
 5. Causality exact (max diff 0.0) on all seeds; F-23 checkpoints reload unchanged (per-lead `spread` broadcast to [A,K]).
+
+---
+
+### F-28. The stationary family's "explosion" is a unit effect: it is a level + a chaotic leak, the most stable family against its level (2026-10-05/06)
+
+Probes `.tmps/stationary_variability/` (`decompose_stationary.py`, `clean_from_others.py`, `split_by_labels.py`,
+`split_by_spectrum_v2.py` + figures); runs `.tmps/runs_hf/rb10k_lvl_seed{0,1,2}`; eval `.tmps/eval_hf/rb10k_lvl_vs_all/`
+(`summary.txt`, `compare_units.png`), F-27 recheck `.tmps/eval_hf/rb10k_all_recheck/`. Decision: D-033.
+
+1. **Exact decomposition (oracle).** The eye is linear, so each channel = Σ modes + masked noise (rebuild error 4e-7).
+   Stationary channels (5, seeds 0-2): std/|level| 0.03-0.05; their wiggle is 68 % chaotic / 34 % cyclic / 0.2 % noise
+   (cyclic channels 0.91 / 0.09, chaotic 0.24 / 0.77). The mix ranks their errors: s0 ch1 (74 % cyclic) h64 0.49 std
+   units; s2 ch0/ch1 (93-99 % chaotic) 1.02. The leak is a slow chaotic envelope: below the chaotic family to ~h30-40.
+2. **Units.** RMSE as % of signal size `sqrt(mean^2+std^2)`, F-27 all 5 seeds, h1/h16/h64: stationary 0.4/1.0/3.4
+   (climatology 4.3), cyclic 3.2/15.5/20.2, chaotic 4.7/41.5/56.4. In std units the same stationary forecast reads
+   0.10/0.24/0.78.
+3. **Truth-free.** Linear fit from the other 15 channels explains 99.1-99.8 % of the leak on validation (residual =
+   noise floor, ~0.2 % of level). Cyclic/chaotic split by source-channel labels fails (cancelling weights); by refined
+   spectral lines + a half-to-half extrapolation test it recovers P300/P60/P140 and matches the oracle on 3/5 channels
+   (corr 0.98-1.00), missing weak lines in strong chaos.
+4. **"Level + leak" scaling (`hf.stationary_scale: level`), seeds 0-2 vs F-27:** stationary % of size h1/h8/h16/h64
+   0.6/0.7/1.2/3.4 vs 0.4/0.5/1.0/3.4; cyclic and chaotic within ±0.01 std units at every lead; stationary spread/error
+   0.92-1.04; causality 0.0. Same long-lead error, slightly worse short-lead -> rejected as default (D-033).
+5. **Also seen:** at long leads the forecast does not shrink to the mean (s2 ch0 h64 corr 0.24, amp 0.66) -> RMSE
+   slightly above climatology in std units; chaotic channels too (s0 ch7 1.08). Open.

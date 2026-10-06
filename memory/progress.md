@@ -1792,3 +1792,84 @@ not yet realistic trajectories (too wild after the x4 inflation; fan chart shows
 estimate is not more precise. Both trace to the memorization of one 2000-step trajectory, which calibration
 patches rather than cures. Proposed next: a longer training series (generator `data.T`), same validation length.
 
+### 2026-10-05 — Why does the "stationary" family's forecast explode with lead? (investigation, no code change)
+
+User: cyclic is stable, chaotic is expected to be hard, but stationary "tends to explode in time" — intuitively it
+should be the most stable. Hypothesis 1: "the signal isn't flat enough; it had to be divided into more stable eyes."
+
+Probe `.tmps/stationary_variability/decompose_stationary.py` (outputs `summary.txt`, `stationary_variability.png`):
+the eye is linear (norm none), so each channel was split EXACTLY into per-mode contributions + masked noise
+(rebuild error 4e-7). F-27 runs `rb10k_all_seed*`, encoders `hf10k_rb_enc_seed*`.
+
+| | stationary (5 ch) | cyclic (25) | chaotic (50) |
+|---|---|---|---|
+| wiggle shares (level removed) cyc / cha / noise | 0.34 / 0.68 / 0.002 | 0.91 / 0.09 / 0 | 0.24 / 0.77 / 0 |
+| RMSE h64, training-std units | 0.85 | 0.34 | 0.82 |
+| RMSE h64, % of the channel's signal size (level included) | **3.5 %** | 20 % | 56 % |
+
+Reading (shown to the user, not yet signed off):
+1. In raw units the stationary channels ARE the most stable (std/|level| 0.03-0.05; h64 error 2-5 % of signal).
+2. The "explosion" comes from per-channel standardization: forecaster and metric divide by the tiny std, so the
+   ~4 % leak becomes the whole signal. That leak is chaotic (+ some cyclic): F-24's scattered-pixel rungs.
+   Composition explains the ranking: s0 ch1 (74 % cyclic) h64 0.49; s2 ch0/ch1 (93-99 % chaotic) h64 1.02.
+   The leak is a SLOW chaotic envelope: better than chaotic channels to ~h30-40, then decorrelates.
+3. Hypothesis 1 half right: not perfectly flat, yes; but a cleaner eye alone would leave the standardized channel
+   as pure obs noise (RMSE ~1 at every lead). The fix is in units / what we ask of a stationary channel.
+4. Separate fault: at long leads the forecast does not shrink toward the mean (s2 ch0 h64 corr 0.24, amp 0.66),
+   so RMSE ends slightly above climatology; chaotic channels show the same (s0 ch7 RMSE 1.08).
+5. Slow rungs of seeds 1/3/4 (std/|level| 0.05) are labelled "chaotic" by the eval labeller: same physics.
+
+#### Addendum — can the stationary history be decomposed WITHOUT the truth? (user, same day)
+
+The split above is an ORACLE (true patterns, amplitudes, noise from the generator). Truth-free versions tried,
+oracle used only to score; all fits on training `[0,8000)`, scored on validation:
+1. **Level+noise vs leak — works.** Linear fit from the other 15 channels (lags 0-8): validation R² 0.991-0.998;
+   residual std 0.04-0.06 (≈ 0.2 % of the level) = the oracle noise floor. The leak is fully redundant with the
+   other channels. `clean_from_others.py/.png`.
+2. **Leak → cyclic vs chaotic by source-channel label — fails.** Group shares 2-129 (huge cancelling weights:
+   "chaotic"-labelled channels carry ~45 % cyclic content). `split_by_labels.py`.
+3. **Leak → cyclic vs chaotic by time signature — works for clear cycles.** Spectral peaks of the channel's own
+   history, period refined on a fine grid (FFT-bin error 308 vs 300 drifts the phase ~5 rad over 10k steps), kept
+   only if a sinusoid fitted on `[0,4000)` predicts `[4000,8000)`. Recovers periods 301.5 / 299.8 / 60.0 and rejects
+   every chaotic quasi-line. Cyclic share est vs oracle: s0 ch1 0.81/0.77 (corr 0.98), s1 ch0 0.58/0.59 (1.00),
+   s2 ch0 0.00/0.01; misses weak lines inside strong chaos: s0 ch0 0.22/0.33 (missed P60), s2 ch1 0.00/0.11 (missed
+   P140). `split_by_spectrum_v2.py`, `split_by_spectrum.png`. Caveat: synthetic cycles are exact sinusoids.
+
+### 2026-10-06 — Stationary history = "level + leak" (`hf.stationary_scale: level`)
+
+User: "If the real case is harder, capturing (forecasting) the wiggle part is not going to work. Then let's treat a
+stationary history as level + leak." This supersedes the 2026-10-01 ruling for the new flag (default unchanged).
+
+- SOP 04 section added first (decisions.md). Code: `config/history_forecaster.yaml` (`hf.stationary_scale: std|level`),
+  `src/train/train_history_forecaster.py` (labels computed once; stationary channels scaled by `sqrt(mu^2+sd^2)`;
+  `norm.npz` + `sd_std`, `stationary`), `src/probes/eval_history_forecaster.py` (RMSE/CRPS converted back to
+  training-std units for every run; new "RMSE % of signal size" table; ridge readout and plotted series in std units).
+- Regression check: the edited probe reproduces F-27's z-unit table exactly (`.tmps/eval_hf/rb10k_all_recheck/`).
+- Runs `.tmps/runs_hf/rb10k_lvl_seed{0,1,2}` (= F-27 setting + flag; seeds 3/4 have no stationary channel), eval
+  `.tmps/eval_hf/rb10k_lvl_vs_all/` (`summary.txt`, `compare_units.png`), reference F-27 seeds 0-2, causality 0.0.
+
+| stationary, seeds 0-2 | h1 | h8 | h16 | h64 |
+|---|---|---|---|---|
+| RMSE % of signal size, level / F-27 / climatology | 0.6 / 0.4 / 4.4 | 0.7 / 0.5 / 4.4 | 1.2 / 1.0 / 4.3 | 3.4 / 3.4 / 4.3 |
+| RMSE training-std units, level / F-27 | 0.140 / 0.100 | 0.157 / 0.119 | 0.281 / 0.240 | 0.795 / 0.778 |
+
+Cyclic / chaotic unchanged within ±0.01 (std units) at every lead -> no measurable capacity freed (3 seeds).
+Stationary spread/error 0.92-1.04. Reading (shown to the user, not signed off): the rescaling does not change how
+good the stationary forecast is at long leads (3.4 % of size either way) and costs a little at short leads (the model
+stops tracking the leak: h1 = persistence, skill -0.05). The "explosion" disappears in the % of size unit for BOTH
+runs; the unit, not the scaling, is what resolves the user's question.
+
+**Ruling (user, same day): "Let's make option A then."** Default `std` scaling kept; stationary family read in % of
+signal size. Recorded as D-033 + F-28; SOP 04 section marked EXPERIMENT. Eval probe: `rmse_unit()` plots the
+stationary RMSE panels of `hf_eval.png` / `hf_ens.png` in % of signal size (other families in std units); checked on
+the redrawn F-27 figures (`.tmps/eval_hf/rb10k_all_recheck/`), std-unit tables unchanged. No commits (user handles git).
+
+User then: "I don't see the changes of forecast, it just plotted on percentage. Stationary = stable signal = small
+variability ensemble." Shared-unit fan figure (`.tmps/eval_hf/rb10k_all_recheck/stationary_fan.py/.png`): the F-27
+stationary ensemble IS already narrow — spread % of signal size h1/h16/h64 0.4/1.2/3.9 vs cyclic 3.1/12.7/18.3, chaotic
+4.9/45.2/57.5; in std units the same spread reads 0.08/0.27/0.89 (≥ chaotic 0.82 at h64). User: "So the model always
+did correctly, I just saw the std z-domain plot?" — yes, except the long-lead non-relaxation to the level (F-28 item 5).
+User: add it to the eval with RMSE values -> `fan_figure()` in the eval probe writes `hf_fan.png` (D-033); checked on F-27:
+RMSE % of size, channels pooled, h1/h8/h16/h64: stationary 0.5/0.6/1.1/3.5, cyclic 3.2/9.3/15.3/20.1, chaotic
+4.7/28.8/41.4/56.2.
+

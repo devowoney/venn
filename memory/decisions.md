@@ -893,26 +893,30 @@ F-24, F-25. Full derivation of the score: `memory/reconstruction_score.md`.
 - **Open, not decided:** (a) harder testbed (e.g. M=40, 74 signals) with K sized to it; (b) the family ladder at
   many modes (0 stationary channels at M=40); (c) a longer budget + stop rule for "stable".
 
-## D-033 — Brain naming of the three parts; module 3 = frontal cortex (decoder) maps the latent forecast to the field
+## D-033 — Stationary channels are judged in % of signal size; the forecaster keeps per-channel std scaling
 
-**Date:** 2026-10-01. **Source:** user rulings in the `memory-intepreter` session (progress.md 2026-10-01), naming
-signed off ("4. Yes"). Amends the naming of D-031 / SOP 04; refines D-012's module 3. Spec: SOP 05.
+**Date:** 2026-10-06. **Source:** user ruling "Let's make option A" (progress.md 2026-10-05/06). Evidence: F-28.
 
-- **Branch.** Module-3 work lives on `memory-intepreter` (worktree `.claude/worktrees/memory-intepreter`, branched
-  from `main` @ `b8a4e7b`, which holds both the observer and the history-forecaster tracks).
-- **Names (supersede D-031's).** (1) **eye-lobe** = encoder / observer (module 1); (2) **hippocampus** = history
-  forecaster (module 2; D-031 / SOP 04 called it "prefrontal cortex"); (3) **frontal cortex** = decoder (module 3;
-  D-031 called it "unconscious memory"). Older records keep their wording; read "prefrontal cortex" there as the
-  hippocampus.
-- **Job of the frontal cortex (user: "the core idea").** Forecast in the latent history, then map the latent forecast
-  to the physical field: `x_hat(t+a) = Dec( S_hat(t+a) )`. Replaces D-012's pseudo-inverse
-  `x(t) + M+(s_hat - M x(t))` as the latent -> field map.
-- **"Information hole" = (a):** field state that the eyes' current reading does not capture (eyes fewer than the
-  field's independent signals); the decoder may read the latent HISTORY to fill it. NOT cross-variable inference
-  (no SSH -> SST or SST -> SSH).
-- **Testbed:** eyes at the level of the modes (observer sweep, F-25: ceiling once K ~ D = 2(M-1) - 4) -> the existing
-  M=10 / K=16 setup (`hf10k_enc_seed*`, train [0,8000), validation [8000,10000)), where the state is FULLY observed.
-  The M=40/K=16 hole regime is not the default (user: "Nope").
+- **Question.** Why does the stationary family's error "explode" with lead (F-27: 0.10 → 0.78 std units, as bad as
+  chaotic) when a constant signal should be the most stable?
+- **Answer recorded.** A stationary channel is a level + a ~3-5 % leak (68 % chaotic / 34 % cyclic, 99 % redundant
+  with the other channels). Per-channel std units magnify the leak to unit variance; judged against the level it sits
+  on, the stationary family is the most stable (h64 error 3.4 % of signal size vs cyclic 20 %, chaotic 56 %).
+- **Ruling (option A).** Keep the 2026-10-01 standardization in the forecaster (`hf.stationary_scale: std`, default).
+  The stationary family is READ in **RMSE as % of signal size** `sqrt(mean^2 + std^2)` on `[0, t_tr)`; every other
+  family stays in training-std units. The eval probe prints both tables for every family and plots the stationary RMSE
+  panels in % of signal size (`rmse_unit`). Every ensemble eval also writes **`hf_fan.png`** (user 2026-10-06: "add the
+  shared-unit fan figure, but I need to see the RMSE values too"): fans of the three families on ONE axis (deviation
+  from the level, % of signal size), each titled with its RMSE h1/h16/h64; per family RMSE (values printed at
+  h1/h8/h16/h64; channels pooled over seeds), spread and spread/error vs lead. "Stationary = stable signal = small
+  variability ensemble" is checked there.
+- **Rejected: option B** (`hf.stationary_scale: level` as default, "level + leak" in the loss). Same long-lead error
+  (3.4 % at h64), slightly worse at short leads (h1 0.6 % vs 0.4 %), no measurable gain for cyclic/chaotic. The flag
+  stays in the code as an experiment, off by default.
+- **Not pursued:** forecasting the leak by decomposition. Truth-free removal works (other channels explain 99 %), and a
+  cyclic/chaotic split by spectral lines works only for clean cycles; the user expects real cycles to be harder.
+- **Known gap.** Slow rungs just above the flatness cut (amp_ratio 0.051-0.055, seeds 1/3/4) are labelled chaotic and
+  therefore read in std units; labeller unchanged.
 
 ## Numbering collisions with the encoder track
 
@@ -2404,3 +2408,27 @@ does not depend on the observer's labels); scenarios trained with fair CRPS on A
 - `spread` buffer is now [A, K] (a per-lead [A] buffer from older runs is broadcast to [A, K] on load).
 - Readout: same probe and launches; compare with the chaotic-only multi-scenario ensemble (F-23 rerun): RMSE of the
   mean and CRPS per family and lead, spread/error per family (now non-zero for every family), spread-skill correlation.
+
+#### A stationary history is "level + leak" (`hf.stationary_scale: level`, user 2026-10-06) — EXPERIMENT, off by default
+
+**Outcome (D-033, F-28):** option A adopted — the default `std` scaling (2026-10-01 ruling) stays; the stationary
+family is READ in RMSE as % of signal size (eval probe: table for every family, stationary RMSE panels plotted in that
+unit). `level` gave the same long-lead error and a slightly worse short-lead one; kept as an experiment flag.
+
+Why: the 2026-10-05 investigation (progress.md) showed the stationary family's error "explodes" only in z units. A
+stationary channel is a level plus a ~3-5 % leak; scaling it by its own std makes the leak the whole target. The leak
+is 68 % chaotic / 34 % cyclic on average and 99 % redundant with the other channels; capturing it truth-free works only
+for clean cycles, and real cycles are harder. User: "let's treat a stationary history as level + leak".
+
+- `hf.stationary_scale: std` (default) = the 2026-10-01 ruling, every channel z-scored by its own std (F-27 unchanged).
+- `hf.stationary_scale: level`: channels labelled **stationary** on the fitting range (`amp_ratio < 0.05`, the same
+  labeller as the chaos mask) are scaled by their SIGNAL SIZE `sqrt(mu^2 + sd^2)` (≈ |level|) instead of `sd`; `mu`
+  stays the training mean. In z they read `0 (= the level) + leak (~±0.05)`. The channel stays in the history the model
+  reads and in the loss, but its weight drops ~400x: the model is no longer asked to chase the leak. Other channels
+  unchanged. `norm.npz` records `sd` (the scale actually used), `sd_std` (own std) and `stationary` (mask).
+- **Units in the readout** (eval probe, every run): RMSE / CRPS stay reported in training-std units (converted back with
+  `sd / sd_std`, so old and new runs share one unit), PLUS a table of RMSE as **% of the channel's signal size**
+  (`sqrt(mu^2 + sd_std^2)` on `[0, t_tr)`) -- the unit in which "stationary is the most stable family" is visible. The
+  hidden-mode ridge readout is fed std-unit states, so it is unaffected by the flag.
+- Readout: same launches; compare against F-27 (`rb10k_all_seed*`) per family and lead, in both units. Known gap: the
+  slow rungs at amp_ratio 0.051-0.055 (seeds 1/3/4) are labelled chaotic and are NOT rescaled (labeller unchanged).

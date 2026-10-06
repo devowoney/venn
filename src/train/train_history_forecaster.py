@@ -148,16 +148,25 @@ def main(cfg: DictConfig) -> None:
     t_fit = int(hf.t_fit) if hf.t_fit else t_tr
     assert t_fit <= t_tr < T_all, (t_fit, t_tr, T_all)
     # channel std spans ~10 .. ~1000: standardize with statistics of the fitting range only
-    mu, sd = S[:t_fit].mean(0), S[:t_fit].std(0) + 1e-8
+    mu, sd_std = S[:t_fit].mean(0), S[:t_fit].std(0) + 1e-8
+    # family labels decided on the FITTING range only (chaos mask for the ensemble head, stationary rescaling below)
+    fam = [label_family(series_stats((S[:t_fit, i] - mu[i]) / sd_std[i]), amp_ratio=amp_ratio(S[:t_fit, i]))
+           for i in range(K)]
+    stationary = np.array([f == "stationary" for f in fam])
+    sd = sd_std.copy()
+    if str(hf.get("stationary_scale", "std")) == "level":
+        # a stationary history is "level + leak": scale it by its signal size, not by the tiny std of its leak,
+        # so the leak stays a ~4 % wobble around 0 (= the level) instead of becoming a unit-variance target
+        sd[stationary] = np.sqrt(mu[stationary] ** 2 + sd_std[stationary] ** 2)
+        print(f"[hf] stationary_scale=level: channels {np.flatnonzero(stationary).tolist()} scaled by signal size "
+              f"(sd/size = {np.round(sd_std[stationary] / sd[stationary], 3).tolist()})")
     z_all = torch.tensor((S - mu) / sd, dtype=torch.float32, device=device)
     z_fit = z_all[:t_fit]                                              # the only data that trains
     print(f"[hf] encoder={run} S={S.shape} fit=[0,{t_fit}) train=[0,{t_tr}) validation=[{t_tr},{T_all})")
 
-    # chaotic-channel mask for the ensemble head: family labels decided on the FITTING range only
     ens_cfg = hf.get("ensemble", None)
     use_ens = bool(ens_cfg is not None and ens_cfg.enable)
-    chaos = np.array([label_family(series_stats((S[:t_fit, i] - mu[i]) / sd[i]), amp_ratio=amp_ratio(S[:t_fit, i]))
-                      == "chaotic" for i in range(K)], dtype=np.float32)
+    chaos = np.array([f == "chaotic" for f in fam], dtype=np.float32)
     members = int(ens_cfg.members) if use_ens else 0
     lam = float(ens_cfg.lambda_crps) if use_ens else 0.0
     chaos_label = chaos.copy()                                         # the family labels themselves, for the record
@@ -165,7 +174,8 @@ def main(cfg: DictConfig) -> None:
         # multi-scenario for the WHOLE family: every channel gets scenarios (and CRPS); the certainty score decides
         # afterwards how wide each one is. `chaos` is the scenario MASK the model uses -- here all ones.
         chaos = np.ones(K, dtype=np.float32)
-    np.savez("norm.npz", mu=mu, sd=sd, t_fit=t_fit, t_tr=t_tr, chaos=chaos, chaos_label=chaos_label)
+    np.savez("norm.npz", mu=mu, sd=sd, sd_std=sd_std, stationary=stationary, t_fit=t_fit, t_tr=t_tr, chaos=chaos,
+             chaos_label=chaos_label)
     if use_ens:
         print(f"[hf] ensemble ON: scenarios on {int(chaos.sum())} channels {np.flatnonzero(chaos).tolist()} "
               f"(chaotic-labelled: {np.flatnonzero(chaos_label).tolist()}); M={members} members, "

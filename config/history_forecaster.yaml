@@ -10,6 +10,11 @@ hf:
   t_fit: null           # targets used for fitting are < t_fit. null = t_tr (final run).
                         # t_fit = 1750 -> DEVELOPMENT run: hyperparameters judged on [1750, 2000), never on validation
   leads: 64             # direct heads psi_{t+1} ... psi_{t+leads}; lead 1 is the primary target
+  stationary_scale: std # how STATIONARY channels (amp_ratio < 0.05 on the fitting range) are scaled before the model
+                        # reads them: std = own std like every channel (ruling 2026-10-01, F-27) | level = signal size
+                        # sqrt(mu^2+sd^2): a stationary history is "level + leak" and the ~4 % leak is not magnified
+                        # into a unit-variance target (user 2026-10-06, SOP 04). D-033: keep std; level gave the same
+                        # h64 error (3.4 % of signal size) and a worse h1 (0.6 % vs 0.4 %) -> experiment only
   # --- model ---
   d: 64                 # token width
   layers: 3             # causal attention blocks
