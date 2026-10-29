@@ -1532,6 +1532,30 @@ time mean kept. Both lift pure-noise cells (std ~ obs_noise) to unit variance. S
 masks must apply it (`evaluate`, `observer_stability`, `plots_observer`); probes reading `artifacts.npz` `S` are
 consistent automatically. Reconstruction targets stay the generator's field.
 
+### Soft family assignment `train.spectral.role_mode` (feature flag, added 2026-10-29 — EXPERIMENT, not a default)
+
+`fixed` (default) = the D-024 rung ladder: every channel's family is ASSIGNED before training (`rung_roles`).
+`soft` = the family is INFERRED from the channel's own signal, every step, with no new parameters (user, 2026-10-29):
+
+    q_stat = sigma(alpha (r_i - r0)/tau),  q_cyc = (1-q_stat) sigma(beta (c_i - 1/2)/tau),  q_chao = the rest
+    (sum_f q_if = 1; a categorical = softmax over log q). Nested in the labeller's ORDER (flat first, then shape):
+    a single flat softmax over [alpha(r-r0), beta(c-1/2), beta(1/2-c)] was measured to call a truly flat trained
+    channel (r=0.96, c=0.28) chaotic. alpha=5, beta=10, tau=1 (untrained eyes: r 0.03-0.65, c 0.18-0.85).
+
+- `r_i = |mean|/(|mean|+std)` (the `L_level` flatness, = 1/(1+amp_ratio)); `r0` = the labeller's flat cut.
+- `c_i = (trend+osc)/total` (the `L_struct` structure share = the labeller's `cyclic_share`); cut 1/2.
+  So argmax q IS the post-hoc labeller's vote, made differentiable.
+- Each family keeps its own penalty set, now weighted by q instead of a role mask:
+  `L_family = mean_i [ q_stat*l_level*pen_level + q_cyc*(l_line*pen_line + l_band*pen_band_cyc)
+  + q_chao*(l_struct*pen_struct + l_band*pen_band_fast) ]`. Band rows per FAMILY (slow / the whole cyclic range /
+  fast); the per-channel cyclic octave of D-024 depended on role order and is dropped. q is NOT detached: a channel
+  slides toward the family it is nearest to. That is the inference.
+- Population: `L_pop = KL(pi || mean_i q_i)`, pi = pop_target normalized. It stops every channel collapsing into one
+  family (pure emergence failed: F-5, F-12). User chose this over no target and over a learned head.
+- "Must fluctuate" exemptions (`l_var`, `l_energy`) weight channels by `1 - q_stat` from the PREVIOUS step (detached).
+- Size ladder untouched (indexed by channel, role-free); slow is no longer tied to the biggest footprints.
+- Artifacts: `q` [K,3], `q_snap`; `roles` = argmax-q names (slow/cyclic/fast), so every probe keeps working.
+
 ### v0 defaults (D-015 — all overridable via ./config/)
 
 | knob | default | alt (deferred) |

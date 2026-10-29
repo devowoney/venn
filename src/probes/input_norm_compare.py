@@ -90,7 +90,7 @@ def score_eye(run: str, device: str) -> tuple[dict, np.ndarray, np.ndarray]:
     noise_mass = float(masks.reshape(K, -1)[:, noise_cell].sum() / masks.sum())
 
     fam = lambda f, k: [x[k] for x in modes if x["family"] == f and not np.isnan(x[k])]  # noqa: E731
-    out = dict(run=run, norm=norm, seed=int(cfg.seed), population=pop, n_flat=pop["stationary"],
+    out = dict(run=run, norm=norm, seed=int(cfg.seed), population=pop, n_flat=pop["stationary"], labels=labels,
                recon_r2=r2, ceiling=ceil, recon_over_ceiling=r2 / ceil, noise_cell_share=float(noise_cell.mean()),
                noise_mass=noise_mass, modes=modes,
                cyc_best=float(np.mean(fam("cyclic", "best_corr"))), cha_best=float(np.mean(fam("chaotic", "best_corr"))),

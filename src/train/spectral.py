@@ -118,6 +118,17 @@ def band_plan(K: int, win_len: int, roles: list[str], slow_period_min: float,
     return W
 
 
+def flat_ratio(S_all: torch.Tensor) -> torch.Tensor:
+    """`r_i = |mean_t s_i| / (|mean_t s_i| + std_t s_i)` [K], differentiable: 1 = a constant, 0 = pure anomaly.
+
+    The labeller's flatness test in differentiable form (`r = 1/(1+amp_ratio)`). Shared by `level_term`
+    and the soft family assignment `family_q`, so both read flatness the same way.
+    """
+    level = S_all.mean(dim=0).abs()
+    fluct = S_all.std(dim=0)
+    return level / (level + fluct + 1e-12)
+
+
 def level_term(S_all: torch.Tensor, is_slow: torch.Tensor, flat_target: float):
     """FLATNESS hinge on the slow rungs: make the channel a static LEVEL, not a slow wiggle (D-025).
 
@@ -141,9 +152,7 @@ def level_term(S_all: torch.Tensor, is_slow: torch.Tensor, flat_target: float):
     Both `level` and `fluct` are homogeneous of degree 1 in the mask scale, so `r` is scale-free in
     value AND gradient (the D-017 rule).
     """
-    level = S_all.mean(dim=0).abs()                         # [K]
-    fluct = S_all.std(dim=0)                                # [K]
-    r = level / (level + fluct + 1e-12)                     # [K] in [0,1]
+    r = flat_ratio(S_all)                                   # [K] in [0,1]
     pen = torch.where(is_slow, torch.relu(flat_target - r) ** 2, torch.zeros_like(r))
     return pen.sum() / is_slow.sum().clamp_min(1), r.detach()
 
@@ -179,6 +188,41 @@ def memory_term(S_win: torch.Tensor, is_slow: torch.Tensor, lag: int, target: fl
     return pen.sum() / n_slow, rho.detach()
 
 
+def structure_share(S_all: torch.Tensor, kpk_min: int = 4) -> torch.Tensor:
+    """Differentiable `cyclic_share = (trend + osc) / total` per channel [K], on the full series.
+
+    Mirrors `src/probes/family.decompose` exactly (see `structure_term` for the why). Shared by
+    `structure_term` and the soft family assignment `family_q`.
+    """
+    xc = S_all - S_all.mean(dim=0, keepdim=True)            # [T,K]; the level is L_level's business
+    p = torch.fft.rfft(xc, dim=0).abs() ** 2                # [n_bins,K]
+    p = p.transpose(0, 1).clone()                           # [K,n_bins]
+    p[:, 0] = 0.0                                           # DC carries no dynamics
+    K, n = p.shape
+    tot = p.sum(dim=1).clamp_min(1e-20)                     # [K] differentiable normalizer
+    k0 = min(max(1, kpk_min), n - 1)                        # below k0: fewer than kpk_min cycles in
+    trend = p[:, 1:k0].sum(dim=1)                           #          the record -> the DRIFT band
+
+    # --- the dominant peak's HALF-POWER band, above k0 (mirrors family.decompose exactly) --------
+    pd = p.detach()
+    hi_band = pd[:, k0:]
+    k_pk = hi_band.argmax(dim=1) + k0                       # [K]
+    half = torch.gather(pd, 1, k_pk[:, None]) / 2.0         # [K,1]
+    ar = torch.arange(n, device=p.device)[None, :].expand(K, n)     # [K,n] bin indices
+    below = pd < half                                       # [K,n] outside the half-power band
+    below[:, :k0] = True                                    # the search stops at the drift band
+    # left edge = one past the LAST sub-half bin at or before the peak; right edge symmetrically.
+    # This picks the CONTIGUOUS run containing the peak, which a plain `pd >= half` mask would not.
+    lo = torch.where(below & (ar <= k_pk[:, None]), ar, torch.full_like(ar, -1)).max(dim=1).values + 1
+    hi = torch.where(below & (ar >= k_pk[:, None]), ar, torch.full_like(ar, n)).min(dim=1).values - 1
+    lo = torch.minimum(lo, k_pk - 2).clamp_min(k0)          # widened to at least +-2 bins, so a pure
+    hi = torch.maximum(hi, k_pk + 2).clamp_max(n - 1)       # tone is not scored as a single bin
+    in_osc = ((ar >= lo[:, None]) & (ar <= hi[:, None])).float()   # detached membership
+    osc = (p * in_osc).sum(dim=1)
+
+    return (trend + osc) / tot
+
+
 def structure_term(S_all: torch.Tensor, is_cyclic: torch.Tensor, is_fast: torch.Tensor,
                    struct_target: float, struct_cap: float, kpk_min: int = 4):
     """Shape hinge written in the LABELLER'S OWN QUANTITY: the structure share `trend + osc` (D-027).
@@ -211,38 +255,36 @@ def structure_term(S_all: torch.Tensor, is_cyclic: torch.Tensor, is_fast: torch.
     and the peak index are DETACHED -- they are integer set memberships with no gradient of their
     own -- while the power summed inside them is differentiable, which is what carries the signal.
     """
-    xc = S_all - S_all.mean(dim=0, keepdim=True)            # [T,K]; the level is L_level's business
-    p = torch.fft.rfft(xc, dim=0).abs() ** 2                # [n_bins,K]
-    p = p.transpose(0, 1).clone()                           # [K,n_bins]
-    p[:, 0] = 0.0                                           # DC carries no dynamics
-    K, n = p.shape
-    tot = p.sum(dim=1).clamp_min(1e-20)                     # [K] differentiable normalizer
-    k0 = min(max(1, kpk_min), n - 1)                        # below k0: fewer than kpk_min cycles in
-    trend = p[:, 1:k0].sum(dim=1)                           #          the record -> the DRIFT band
-
-    # --- the dominant peak's HALF-POWER band, above k0 (mirrors family.decompose exactly) --------
-    pd = p.detach()
-    hi_band = pd[:, k0:]
-    k_pk = hi_band.argmax(dim=1) + k0                       # [K]
-    half = torch.gather(pd, 1, k_pk[:, None]) / 2.0         # [K,1]
-    ar = torch.arange(n, device=p.device)[None, :].expand(K, n)     # [K,n] bin indices
-    below = pd < half                                       # [K,n] outside the half-power band
-    below[:, :k0] = True                                    # the search stops at the drift band
-    # left edge = one past the LAST sub-half bin at or before the peak; right edge symmetrically.
-    # This picks the CONTIGUOUS run containing the peak, which a plain `pd >= half` mask would not.
-    lo = torch.where(below & (ar <= k_pk[:, None]), ar, torch.full_like(ar, -1)).max(dim=1).values + 1
-    hi = torch.where(below & (ar >= k_pk[:, None]), ar, torch.full_like(ar, n)).min(dim=1).values - 1
-    lo = torch.minimum(lo, k_pk - 2).clamp_min(k0)          # widened to at least +-2 bins, so a pure
-    hi = torch.maximum(hi, k_pk + 2).clamp_max(n - 1)       # tone is not scored as a single bin
-    in_osc = ((ar >= lo[:, None]) & (ar <= hi[:, None])).float()   # detached membership
-    osc = (p * in_osc).sum(dim=1)
-
-    struct = (trend + osc) / tot                            # [K] the readout's `cyclic_share`
+    struct = structure_share(S_all, kpk_min)                # [K] the readout's `cyclic_share`
     pen = torch.where(is_cyclic, torch.relu(struct_target - struct) ** 2,
                       torch.where(is_fast, torch.relu(struct - struct_cap) ** 2,
                                   torch.zeros_like(struct)))       # slow rungs: L_level's job
     n_act = (is_cyclic | is_fast).sum().clamp_min(1)
     return pen.sum() / n_act, struct.detach()
+
+
+def window_power(S_win: torch.Tensor) -> torch.Tensor:
+    """Window-averaged periodogram [K, n_bins] of `S_win` [n_win, L, K], DC bin zeroed.
+
+    Each window's own mean is removed, not the global mean: a slow drift across windows would
+    otherwise land in bin 0. Shared by `spectral_terms` and `family_q`.
+    """
+    xc = S_win - S_win.mean(dim=1, keepdim=True)
+    p = torch.fft.rfft(xc, dim=1).abs() ** 2               # [n_win, n_bins, K]
+    p = p.mean(dim=0).transpose(0, 1).clone()              # average the periodograms -> [K, n_bins]
+    p[:, 0] = 0.0                                          # drop the DC bin (see band_plan)
+    return p
+
+
+def line_fraction(p: torch.Tensor) -> torch.Tensor:
+    """Power within +-2 bins of the peak over total power [K]. `argmax` is detached (an index has no
+    gradient anyway); the SUM over that window is differentiable, which is what carries the signal."""
+    tot = p.sum(dim=1).clamp_min(1e-20)
+    n_bins = p.shape[1]
+    k_pk = p.detach().argmax(dim=1)                        # [K]
+    offs = torch.arange(-2, 3, device=p.device)
+    idx = (k_pk[:, None] + offs[None, :]).clamp(0, n_bins - 1)   # [K,5]
+    return torch.gather(p, 1, idx).sum(dim=1) / tot
 
 
 def spectral_terms(S_win: torch.Tensor, band: torch.Tensor, is_cyclic: torch.Tensor,
@@ -266,13 +308,7 @@ def spectral_terms(S_win: torch.Tensor, band: torch.Tensor, is_cyclic: torch.Ten
 
     Returns (l_band, l_line, diag) with diag holding per-channel `bandfrac` / `linefrac` for logging.
     """
-    xc = S_win - S_win.mean(dim=1, keepdim=True)           # remove each window's mean, not the
-    #                                                        global mean: a slow drift across
-    #                                                        windows would otherwise land in bin 0
-    p = torch.fft.rfft(xc, dim=1).abs() ** 2               # [n_win, n_bins, K]
-    p = p.mean(dim=0).transpose(0, 1)                      # average the periodograms -> [K, n_bins]
-    p = p.clone()
-    p[:, 0] = 0.0                                          # drop the DC bin (see band_plan)
+    p = window_power(S_win)                                # [K, n_bins], DC dropped
     tot = p.sum(dim=1).clamp_min(1e-20)                    # [K] differentiable -> ratios are
     #                                                        scale-free in the gradient too (D-017)
 
@@ -281,13 +317,7 @@ def spectral_terms(S_win: torch.Tensor, band: torch.Tensor, is_cyclic: torch.Ten
     w_sum = w.sum().clamp_min(1e-6)
     l_band = ((torch.relu(band_target - bandfrac) ** 2) * w).sum() / w_sum
 
-    # line concentration: power within +-2 bins of the peak. `argmax` is detached (an index has no
-    # gradient anyway); the SUM over that window is differentiable, which is what carries the signal.
-    K_, n_bins = p.shape
-    k_pk = p.detach().argmax(dim=1)                        # [K]
-    offs = torch.arange(-2, 3, device=p.device)
-    idx = (k_pk[:, None] + offs[None, :]).clamp(0, n_bins - 1)   # [K,5]
-    linefrac = torch.gather(p, 1, idx).sum(dim=1) / tot     # [K]
+    linefrac = line_fraction(p)                            # [K] line concentration around the peak
 
     pen = torch.where(is_cyclic,
                       torch.relu(line_target - linefrac) ** 2,      # cyclic rungs: BE a line
@@ -300,3 +330,70 @@ def spectral_terms(S_win: torch.Tensor, band: torch.Tensor, is_cyclic: torch.Ten
     l_line = (pen * lw).sum() / w_sum
 
     return l_band, l_line, dict(bandfrac=bandfrac.detach(), linefrac=linefrac.detach())
+
+
+# ---------------------------------------------------------------------------------------------------------
+# SOFT family assignment (SOP 02 `role_mode: soft`, user 2026-10-29)
+# ---------------------------------------------------------------------------------------------------------
+FAMILY_ROLE = ("slow", "cyclic", "fast")     # q column -> the role name every probe already understands
+
+
+def family_q(r: torch.Tensor, c: torch.Tensor, alpha: float, beta: float, tau: float,
+             r0: float, c0: float = 0.5) -> torch.Tensor:
+    """Soft family membership per channel, inferred from its own signal: q [K,3] = (stat, cyc, chao), rows sum to 1.
+
+    Follows the labeller's decision ORDER, so argmax q is the post-hoc label made differentiable:
+        q_stat = sigma(alpha (r - r0) / tau)                         flat first   (labeller: amp_ratio < FLAT_THR)
+        q_cyc  = (1 - q_stat) * sigma(beta (c - c0) / tau)           then structure share vs 1/2
+        q_chao = (1 - q_stat) * (1 - sigma(beta (c - c0) / tau))     (labeller: cyclic_share >= residual)
+    A categorical distribution, i.e. a softmax over the logits log q. WHY nested and not one flat softmax over
+    [alpha(r-r0), beta(c-1/2), beta(1/2-c)]: measured on trained eyes, a truly flat channel (r=0.96, c=0.28) gets
+    logits ~[0.03, -2.2, +2.2] and would be called CHAOTIC -- flatness has to be decided before shape, exactly as
+    the labeller does. q_stat crosses 1/2 exactly at the labeller's flat cut r0.
+    No parameters: the only knobs are the logit scales alpha, beta and the temperature tau. alpha is kept soft
+    (5) so a channel far from flat still feels the population pull (untrained eyes measure r 0.03-0.65).
+    """
+    q_stat = torch.sigmoid(alpha * (r - r0) / tau)
+    p_cyc = torch.sigmoid(beta * (c - c0) / tau)
+    return torch.stack([q_stat, (1 - q_stat) * p_cyc, (1 - q_stat) * (1 - p_cyc)], dim=1)
+
+
+def soft_family_terms(S_all: torch.Tensor, S_win: torch.Tensor, band3: torch.Tensor, sp, pop: torch.Tensor):
+    """Every family's own penalty, weighted by the channel's q instead of a fixed role mask.
+
+    S_all [t_fit,K] full training series; S_win [n_win,L,K] windows; band3 [3,n_bins] one band row per
+    family (slow / whole cyclic range / fast); `sp` = cfg.train.spectral; pop [3] target population.
+
+    Per channel and family (all already per-channel vectors in the fixed ladder, same hinges, same lambdas):
+      stationary : lambda_level  * relu(flat_target - r)^2
+      cyclic     : lambda_line   * relu(line_target - linefrac)^2 + lambda_band * relu(band_target - bandfrac_cyc)^2
+      chaotic    : lambda_struct * relu(c - struct_cap)^2          + lambda_band * relu(band_target - bandfrac_fast)^2
+    The cyclic shape stays on `linefrac`, not the structure share: structure on cyclic rungs collapsed them all
+    onto the period-60 cycle (D-027 measurement).
+
+    L_family = mean_i sum_f q_if * pen_if   -- q NOT detached: each channel slides toward its nearest family.
+    L_pop    = KL(pop || mean_i q_i)        -- keeps the families populated (emergence alone failed, F-5/F-12).
+    Returns (l_family, l_pop, q, diag).
+    """
+    so = sp.soft
+    r = flat_ratio(S_all)                                   # [K]
+    c = structure_share(S_all)                              # [K]
+    q = family_q(r, c, float(so.alpha), float(so.beta), float(so.tau), float(so.r0))
+
+    p = window_power(S_win)                                 # [K,n_bins]
+    tot = p.sum(dim=1).clamp_min(1e-20)
+    bandfrac = (p @ band3.T) / tot[:, None]                 # [K,3] power share in each family's band
+    linefrac = line_fraction(p)                             # [K]
+
+    pen = torch.stack([
+        float(sp.lambda_level) * torch.relu(float(sp.flat_target) - r) ** 2,
+        float(sp.lambda_line) * torch.relu(float(sp.line_target) - linefrac) ** 2
+        + float(sp.lambda_band) * torch.relu(float(sp.band_target) - bandfrac[:, 1]) ** 2,
+        float(sp.lambda_struct) * torch.relu(c - float(sp.struct_cap)) ** 2
+        + float(sp.lambda_band) * torch.relu(float(sp.band_target) - bandfrac[:, 2]) ** 2,
+    ], dim=1)                                               # [K,3]
+    l_family = (q * pen).sum(dim=1).mean()
+    qbar = q.mean(dim=0).clamp_min(1e-8)                    # soft population, sums to 1
+    l_pop = (pop * (pop.clamp_min(1e-8).log() - qbar.log())).sum()
+    return l_family, l_pop, q, dict(r=r.detach(), c=c.detach(), linefrac=linefrac.detach(),
+                                    bandfrac=bandfrac.detach(), pen=pen.detach())
