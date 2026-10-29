@@ -1555,6 +1555,25 @@ consistent automatically. Reconstruction targets stay the generator's field.
 - "Must fluctuate" exemptions (`l_var`, `l_energy`) weight channels by `1 - q_stat` from the PREVIOUS step (detached).
 - Size ladder untouched (indexed by channel, role-free); slow is no longer tied to the biggest footprints.
 - Artifacts: `q` [K,3], `q_snap`; `roles` = argmax-q names (slow/cyclic/fast), so every probe keeps working.
+- Commitment knobs (added after the first soft runs met `L_pop` by spreading q_stat 0.1-0.5 thinly over many
+  channels, none actually flat): `soft.tau_end` anneals tau geometrically to it (soft-mode DEFAULT 0.2, user
+  2026-10-29); `soft.lambda_ent` adds `mean_i H(q_i)` (ablation, default 0: it froze the untrained families).
+  In every variant a channel's family is chosen in the first ~500 steps; the knobs sharpen, they do not redistribute.
+- Population pull: `soft.lambda_pop` 0.5 (the init gradient match) left cyclic over-filled (~8.5 vs 5); 5 lands on
+  the target every seed (M=10). **Default 5** (user 2026-10-29) -- a deliberate departure from gradient matching.
+  `soft.pop_integer: true` (default) rounds the target to whole channels like `rung_roles` (K=16 -> 2/5/9): the
+  fractional 1.6 stationary was met by one committed channel plus one parked exactly at the cut (1.0 + 0.6).
+
+### Flatness measure `train.spectral.flat_measure` (added 2026-10-29; `log` is the DEFAULT, user)
+
+`ratio` = the D-025 hinge `relu(flat_target - r)^2`, r = |mean|/(|mean|+std); kept to reproduce older runs.
+`log` = `relu(log amp_ratio - log flat_amp_target)^2`, amp_ratio = std/|mean| (the labeller's own quantity), target
+0.02 (== r 0.98), weight `lambda_level_log` 6e-4 gradient-matched at init. In soft mode `q_stat` reads the same units:
+`sigma(alpha_log (log 0.05 - log amp_ratio) / tau)`. WHY: the ratio hinge fades to ~1e-5 near the cut, and every
+eye (fixed AND soft) stalled at r 0.95-0.97 while a mask can reach 0.995. With `log` committed stationary channels
+reach r 0.975-0.978 (just under target, where a one-sided hinge stops). Remaining cap in FIXED mode: the size
+ladder pins the slow rungs to the largest footprints, and flatness falls with size (oracle r 0.99 at <=1000 cells,
+0.97-0.98 at 2000-2500); fixed-mode slow rungs sit at that size ceiling.
 
 ### v0 defaults (D-015 — all overridable via ./config/)
 

@@ -27,7 +27,7 @@ from src.data.synthetic import GenConfig, generate_field, normalize_input  # noq
 from src.models.encoder import SelectionEncoder            # noqa: E402
 from src.train.spectral import (FAMILY_ROLE, band_plan, flat_ratio, level_term,  # noqa: E402
                                memory_term, rung_roles, soft_family_terms, spectral_terms,
-                               structure_share, structure_term, family_q)
+                               structure_share, structure_term, family_q, soft_q)
 
 
 def _anneal(step: int, total: int, t0: float, t1: float) -> float:
@@ -129,8 +129,14 @@ def main(cfg: DictConfig) -> None:
             band3 = band_plan(3, int(sp.win_len), list(FAMILY_ROLE), float(sp.slow_period_min),
                               float(sp.fast_period_max), float(sp.cyclic_period_max),
                               device=device)       # one band row per FAMILY: slow / whole cyclic range / fast
-            pop = torch.tensor(list(sp.pop_target), dtype=torch.float32, device=device)
-            pop = pop / pop.sum()                  # target population as fractions (1/3/6 -> .1/.3/.6)
+            if bool(sp.soft.get("pop_integer", True)):
+                # WHOLE channels (2026-10-29): 1/3/6 rounded to counts exactly as the ladder does (K=16 -> 2/5/9).
+                # A fractional target (1.6 stationary) was met by one committed channel + one parked at the cut.
+                n_fam = rung_roles(K, list(sp.pop_target))
+                pop = torch.tensor([n_fam.count(f) for f in FAMILY_ROLE], dtype=torch.float32, device=device) / K
+            else:
+                pop = torch.tensor(list(sp.pop_target), dtype=torch.float32, device=device)
+                pop = pop / pop.sum()              # target population as fractions (1/3/6 -> .1/.3/.6)
             flat_rungs, w_dyn = False, torch.ones(K, device=device)   # exemptions follow q from step 1 on
             q_snaps = []
             print(f"[train] SOFT family assignment | pop target {pop.tolist()} | soft={dict(sp.soft)}")
@@ -251,14 +257,22 @@ def main(cfg: DictConfig) -> None:
         if use_spec and soft:
             # SOFT families: each channel's penalties are weighted by its inferred q_i, and L_pop keeps the
             # population near the target. Same hinges and lambdas as the ladder (see soft_family_terms).
-            l_family, l_pop, q, sdiag = soft_family_terms(S_all, S_win, band3, sp, pop)
+            # COMMITMENT knob 1: anneal the family temperature, so q sharpens as the eye settles
+            tau_end = sp.soft.get("tau_end")
+            tau_now = _anneal(step, steps, float(sp.soft.tau), float(tau_end)) if tau_end else float(sp.soft.tau)
+            l_family, l_pop, l_ent, q, sdiag = soft_family_terms(S_all, S_win, band3, sp, pop, tau=tau_now)
             if step == 0:
-                # gradient match for lambda_pop (the D-019 convention): report |g_pop| vs |g_white| at init
+                # gradient match (the D-019 convention): report |g_pop|, |g_ent| vs |g_white| at init
                 g_w = torch.autograd.grad(l_white, enc.logits, retain_graph=True)[0].norm()
                 g_p = torch.autograd.grad(l_pop, enc.logits, retain_graph=True)[0].norm()
-                print(f"[train] grad match at init: |g_white|={g_w:.2e} |g_pop|={g_p:.2e} "
-                      f"-> lambda_pop ~ {float(g_w / g_p.clamp_min(1e-20)):.3g} (config {sp.soft.lambda_pop})")
+                g_e = torch.autograd.grad(l_ent, enc.logits, retain_graph=True)[0].norm()
+                print(f"[train] grad match at init: |g_white|={g_w:.2e} |g_pop|={g_p:.2e} |g_ent|={g_e:.2e} "
+                      f"-> lambda_pop ~ {float(g_w / g_p.clamp_min(1e-20)):.3g} (config {sp.soft.lambda_pop}), "
+                      f"lambda_ent ~ {float(g_w / g_e.clamp_min(1e-20)):.3g} (config {sp.soft.get('lambda_ent', 0.0)})")
             loss = loss + l_family + float(sp.soft.lambda_pop) * l_pop
+            # COMMITMENT knob 2: per-channel decisiveness, so the population is carried by committed channels
+            if float(sp.soft.get("lambda_ent", 0.0)):
+                loss = loss + float(sp.soft.lambda_ent) * l_ent
             # the "must fluctuate" exemptions of the NEXT step follow this step's stationary membership
             w_dyn = (1.0 - q[:, 0]).detach()
             l_band = l_line = l_mem = l_level = l_struct = torch.zeros((), device=device)
@@ -297,9 +311,19 @@ def main(cfg: DictConfig) -> None:
             if flat_rungs:
                 # STATIONARY = CONSTANT (D-025): the slow rungs are driven by flatness, measured on
                 # the full series, since "constant" is a claim about all of T.
-                l_level, r_flat = level_term(S_all, is_slow, float(sp.flat_target))
+                # `flat_measure: log` (2026-10-29) asks for flatness in log(amp_ratio) units; the ratio hinge
+                # faded near the cut and left every slow rung at r 0.95-0.97 (target 0.98)
+                measure = str(sp.get("flat_measure", "ratio"))
+                l_level, r_flat = level_term(S_all, is_slow, float(sp.flat_target), measure,
+                                             float(sp.get("flat_amp_target", 0.02)))
                 l_mem, rho_lag = torch.zeros((), device=device), None
-                loss = loss + sp.lambda_level * l_level
+                lam_lvl = float(sp.lambda_level_log) if measure == "log" else float(sp.lambda_level)
+                if step == 0 and measure == "log":
+                    g_w = torch.autograd.grad(l_white, enc.logits, retain_graph=True)[0].norm()
+                    g_l = torch.autograd.grad(l_level, enc.logits, retain_graph=True)[0].norm()
+                    print(f"[train] grad match at init: |g_white|={g_w:.2e} |g_level_log|={g_l:.2e} -> "
+                          f"lambda_level_log ~ {float(g_w / g_l.clamp_min(1e-20)):.3g} (config {lam_lvl})")
+                loss = loss + lam_lvl * l_level
             else:
                 # `slow_objective: memory` -- the earlier reading of stationary as a slow DRIFT.
                 # Kept as an ablation; the user's definition is `level` (see D-025).
@@ -361,7 +385,7 @@ def main(cfg: DictConfig) -> None:
                 print(f"  step {step:5d} | soft q: mean {qm[0]:.2f}/{qm[1]:.2f}/{qm[2]:.2f} "
                       f"argmax {int((hard == 0).sum())}/{int((hard == 1).sum())}/{int((hard == 2).sum())} "
                       f"H={ent:.2f} family={l_family.item():.4f} pop={l_pop.item():.4f} "
-                      f"r_max={r_flat.max():.2f}")
+                      f"r_max={r_flat.max():.2f} tau={tau_now:.2f}")
             if rho_lag is not None:
                 writer.add_scalar("band/rho_lag_max", rho_lag.max().item(), step)
             if sp_diag is not None:
@@ -399,8 +423,7 @@ def main(cfg: DictConfig) -> None:
             # final inferred families on the TRAINING slice (what the loss saw); `roles` becomes the argmax name,
             # so every probe that reads `roles` (evaluate, plots_observer, ssh_to_sst, ...) keeps working
             S_fit = enc(field_fit)
-            q_fin = family_q(flat_ratio(S_fit), structure_share(S_fit), float(sp.soft.alpha), float(sp.soft.beta),
-                             float(sp.soft.tau), float(sp.soft.r0)).cpu().numpy()
+            q_fin = soft_q(S_fit, sp, tau_now).cpu().numpy()   # final (annealed) temperature, configured measure
             roles = [FAMILY_ROLE[j] for j in q_fin.argmax(axis=1)]
             soft_out = dict(q=q_fin, **(dict(q_snap=np.stack(q_snaps)) if q_snaps else {}))
             print(f"[train] final soft families (argmax q): {roles}")

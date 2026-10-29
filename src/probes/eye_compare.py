@@ -35,8 +35,34 @@ PRESETS = {   # preset -> testbed -> variant -> run pattern (+ seeds); variants 
         "M=10": {"fixed": ".tmps/runs/obs_t8000_seed{s}", "soft": ".tmps/runs/obs_t8000_soft_seed{s}", "seeds": range(5)},
         "M=40": {"fixed": ".tmps/runs/m40_K16_seed{s}", "soft": ".tmps/runs/m40_K16_soft_seed{s}", "seeds": range(3)},
     },
+    # commitment levers on top of soft (2026-10-29): anneal = tau 1 -> 0.2, ent = lambda_ent 0.5
+    "soft_commit": {
+        "M=10": {"fixed": ".tmps/runs/obs_t8000_seed{s}", "soft": ".tmps/runs/obs_t8000_soft_seed{s}",
+                 "anneal": ".tmps/runs/obs_t8000_soft_anneal_seed{s}", "ent": ".tmps/runs/obs_t8000_soft_ent_seed{s}",
+                 "seeds": range(5)},
+        "M=40": {"fixed": ".tmps/runs/m40_K16_seed{s}", "soft": ".tmps/runs/m40_K16_soft_seed{s}",
+                 "anneal": ".tmps/runs/m40_K16_soft_anneal_seed{s}", "ent": ".tmps/runs/m40_K16_soft_ent_seed{s}",
+                 "seeds": range(3)},
+    },
+    # population pull on top of the annealed soft default (2026-10-29): lambda_pop 0.5 (= anneal run) / 2 / 5
+    "soft_pop": {
+        "M=10": {"fixed": ".tmps/runs/obs_t8000_seed{s}", "pop0.5": ".tmps/runs/obs_t8000_soft_anneal_seed{s}",
+                 "pop2": ".tmps/runs/obs_t8000_soft_pop2_seed{s}", "pop5": ".tmps/runs/obs_t8000_soft_pop5_seed{s}",
+                 "seeds": range(5)},
+    },
+    # flatness measure in both modes (2026-10-29): ratio hinge (historical) vs log(amp_ratio) hinge (+ log q_stat)
+    "soft_logflat": {
+        "M=10": {"fixed": ".tmps/runs/obs_t8000_seed{s}", "fixed_log": ".tmps/runs/obs_t8000_logflat_seed{s}",
+                 "soft": ".tmps/runs/obs_t8000_soft_pop5_seed{s}", "soft_log": ".tmps/runs/obs_t8000_soft_pop5_logflat_seed{s}",
+                 "seeds": range(5)},
+    },
+    # whole-channel population target (2026-10-29), all on the new log-flatness default
+    "soft_popint": {
+        "M=10": {"fixed_log": ".tmps/runs/obs_t8000_logflat_seed{s}", "soft_log": ".tmps/runs/obs_t8000_soft_pop5_logflat_seed{s}",
+                 "soft_int": ".tmps/runs/obs_t8000_soft_popint_seed{s}", "seeds": range(5)},
+    },
 }
-VCOL = ["#8c8b86", "#2a78d6", "#eb6834"]
+VCOL = ["#8c8b86", "#2a78d6", "#eb6834", "#1baf7a"]
 METRICS = [("recon_over_ceiling", "reconstruction R² / ceiling"), ("cyc_best", "cyclic: best single |corr|"),
            ("cha_best", "chaotic: best single |corr|"), ("cyc_dec", "cyclic: decode R² (all K)"),
            ("cha_dec", "chaotic: decode R² (all K)")]
@@ -133,6 +159,13 @@ def main():
                 res, _, _ = score_eye(run, device)
                 res["variant"] = var
                 art = np.load(os.path.join(run, "artifacts.npz"), allow_pickle=True)
+                # flatness r = |mean|/(|mean|+std) per channel on the training slice: how decisively flat the
+                # stationary channels are (labeller cut 0.952, loss target 0.98)
+                S_fit = art["S"][: int(art["t_fit"])].astype(np.float64)
+                r = np.abs(S_fit.mean(0)) / (np.abs(S_fit.mean(0)) + S_fit.std(0))
+                st = [i for i, lab in enumerate(res["labels"]) if lab == "stationary"]
+                res["stat_r"] = float(r[st].mean()) if st else float("nan")
+                res["n_r98"] = int((r >= 0.98).sum())
                 if "q" in art.files:
                     fam_q = [ROLE2FAM[r] for r in art["roles"]]
                     res["q"] = art["q"].tolist()
@@ -140,9 +173,10 @@ def main():
                     res["q_population"] = {f: fam_q.count(f) for f in FAM_COL}
                     if s == 0:
                         fig_q(run, res["labels"], f"{grp} seed 0 ({var})",
-                              os.path.join(a.out, f"q_{grp.replace('=', '')}_seed0.png"))
+                              os.path.join(a.out, f"q_{grp.replace('=', '')}_{var}_seed0.png"))
                 R[grp].append(res)
                 extra = (f" | argmax-q pop {res['q_population']} agree {res['agreement']:.2f}" if "q" in res else "")
+                extra += f" | stat r {res['stat_r']:.3f} n(r>=.98) {res['n_r98']}"
                 print(f"{grp} seed {s} {var:>6}: pop {res['population']} R2/C {res['recon_over_ceiling']:.3f} "
                       f"cyc best/dec {res['cyc_best']:.2f}/{res['cyc_dec']:.2f} cha best/dec "
                       f"{res['cha_best']:.2f}/{res['cha_dec']:.2f}{extra}", flush=True)

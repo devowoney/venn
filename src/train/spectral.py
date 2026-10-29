@@ -129,7 +129,29 @@ def flat_ratio(S_all: torch.Tensor) -> torch.Tensor:
     return level / (level + fluct + 1e-12)
 
 
-def level_term(S_all: torch.Tensor, is_slow: torch.Tensor, flat_target: float):
+def log_amp(S_all: torch.Tensor) -> torch.Tensor:
+    """`log(std_t s_i / |mean_t s_i|)` [K] = log of the labeller's `amp_ratio`, differentiable and scale-free.
+
+    WHY a log (SOP 02 `flat_measure: log`, 2026-10-29). Flatness only becomes meaningful within a few percent of
+    a constant, where r = 1/(1+amp_ratio) is squeezed into 0.95..1.0: there the squared r-hinge has ~1e-5 left
+    and every trained eye -- fixed ladder AND soft -- stalled at r 0.95-0.97 although a mask can reach 0.995 on
+    this field (measured). In log units each FACTOR of flatness counts the same, near the target or far from it.
+    """
+    level = S_all.mean(dim=0).abs()
+    fluct = S_all.std(dim=0)
+    return torch.log(fluct + 1e-12) - torch.log(level + 1e-12)
+
+
+def flat_penalty(S_all: torch.Tensor, measure: str, flat_target: float, amp_target: float) -> torch.Tensor:
+    """Per-channel flatness hinge [K] (unweighted). `ratio`: relu(flat_target - r)^2 (D-025, the historical one);
+    `log`: relu(log amp_ratio - log amp_target)^2, i.e. ask the fluctuation to be at most `amp_target` x the level."""
+    if measure == "log":
+        return torch.relu(log_amp(S_all) - float(np.log(amp_target))) ** 2
+    return torch.relu(flat_target - flat_ratio(S_all)) ** 2
+
+
+def level_term(S_all: torch.Tensor, is_slow: torch.Tensor, flat_target: float, measure: str = "ratio",
+               amp_target: float = 0.02):
     """FLATNESS hinge on the slow rungs: make the channel a static LEVEL, not a slow wiggle (D-025).
 
     `r_i = level_i / (level_i + fluct_i)`, with `level_i = |mean_t s_i|` and `fluct_i = std_t s_i`.
@@ -152,8 +174,8 @@ def level_term(S_all: torch.Tensor, is_slow: torch.Tensor, flat_target: float):
     Both `level` and `fluct` are homogeneous of degree 1 in the mask scale, so `r` is scale-free in
     value AND gradient (the D-017 rule).
     """
-    r = flat_ratio(S_all)                                   # [K] in [0,1]
-    pen = torch.where(is_slow, torch.relu(flat_target - r) ** 2, torch.zeros_like(r))
+    r = flat_ratio(S_all)                                   # [K] in [0,1], for logging in either measure
+    pen = torch.where(is_slow, flat_penalty(S_all, measure, flat_target, amp_target), torch.zeros_like(r))
     return pen.sum() / is_slow.sum().clamp_min(1), r.detach()
 
 
@@ -358,14 +380,36 @@ def family_q(r: torch.Tensor, c: torch.Tensor, alpha: float, beta: float, tau: f
     return torch.stack([q_stat, (1 - q_stat) * p_cyc, (1 - q_stat) * (1 - p_cyc)], dim=1)
 
 
-def soft_family_terms(S_all: torch.Tensor, S_win: torch.Tensor, band3: torch.Tensor, sp, pop: torch.Tensor):
+def soft_q(S_all: torch.Tensor, sp, tau: float | None = None) -> torch.Tensor:
+    """q [K,3] for a channel series, in the configured flatness measure. One place, so training and the saved
+    final q are computed the same way.
+
+    `flat_measure: ratio` -> family_q as above. `flat_measure: log` -> the stationary vote is read in log units:
+        q_stat = sigma(alpha_log (log amp0 - log amp_ratio) / tau),  amp0 = (1 - r0) / r0  (= the labeller's 0.05)
+    so it still crosses 1/2 exactly at the labeller's cut, but r = 0.965 (amp 0.036) is no longer "half stationary":
+    with alpha_log = 2, tau = 0.2 it gives q_stat 0.96, and amp 0.02 gives ~1.
+    """
+    so = sp.soft
+    t = float(so.tau) if tau is None else tau
+    r, c = flat_ratio(S_all), structure_share(S_all)
+    q = family_q(r, c, float(so.alpha), float(so.beta), t, float(so.r0))
+    if str(sp.get("flat_measure", "ratio")) == "log":
+        amp0 = (1.0 - float(so.r0)) / float(so.r0)
+        q_stat = torch.sigmoid(float(so.alpha_log) * (float(np.log(amp0)) - log_amp(S_all)) / t)
+        p_cyc = torch.sigmoid(float(so.beta) * (c - 0.5) / t)
+        q = torch.stack([q_stat, (1 - q_stat) * p_cyc, (1 - q_stat) * (1 - p_cyc)], dim=1)
+    return q
+
+
+def soft_family_terms(S_all: torch.Tensor, S_win: torch.Tensor, band3: torch.Tensor, sp, pop: torch.Tensor,
+                      tau: float | None = None):
     """Every family's own penalty, weighted by the channel's q instead of a fixed role mask.
 
     S_all [t_fit,K] full training series; S_win [n_win,L,K] windows; band3 [3,n_bins] one band row per
     family (slow / whole cyclic range / fast); `sp` = cfg.train.spectral; pop [3] target population.
 
     Per channel and family (all already per-channel vectors in the fixed ladder, same hinges, same lambdas):
-      stationary : lambda_level  * relu(flat_target - r)^2
+      stationary : lambda_level  * relu(flat_target - r)^2   (flat_measure: log -> lambda_level_log * log-amp hinge)
       cyclic     : lambda_line   * relu(line_target - linefrac)^2 + lambda_band * relu(band_target - bandfrac_cyc)^2
       chaotic    : lambda_struct * relu(c - struct_cap)^2          + lambda_band * relu(band_target - bandfrac_fast)^2
     The cyclic shape stays on `linefrac`, not the structure share: structure on cyclic rungs collapsed them all
@@ -373,12 +417,16 @@ def soft_family_terms(S_all: torch.Tensor, S_win: torch.Tensor, band3: torch.Ten
 
     L_family = mean_i sum_f q_if * pen_if   -- q NOT detached: each channel slides toward its nearest family.
     L_pop    = KL(pop || mean_i q_i)        -- keeps the families populated (emergence alone failed, F-5/F-12).
-    Returns (l_family, l_pop, q, diag).
+    L_ent    = mean_i H(q_i)                -- decisiveness. WHY: L_pop sees only the MEAN of q, and the first soft
+               runs met it by spreading q_stat 0.1-0.5 over many channels with none actually flat. Low entropy
+               per channel forces the target share to be carried by channels that commit.
+    `tau` overrides the config temperature (annealing). Returns (l_family, l_pop, l_ent, q, diag).
     """
-    so = sp.soft
     r = flat_ratio(S_all)                                   # [K]
     c = structure_share(S_all)                              # [K]
-    q = family_q(r, c, float(so.alpha), float(so.beta), float(so.tau), float(so.r0))
+    q = soft_q(S_all, sp, tau)                              # [K,3] in the configured flatness measure
+    measure = str(sp.get("flat_measure", "ratio"))
+    lam_flat = float(sp.lambda_level_log) if measure == "log" else float(sp.lambda_level)
 
     p = window_power(S_win)                                 # [K,n_bins]
     tot = p.sum(dim=1).clamp_min(1e-20)
@@ -386,7 +434,7 @@ def soft_family_terms(S_all: torch.Tensor, S_win: torch.Tensor, band3: torch.Ten
     linefrac = line_fraction(p)                             # [K]
 
     pen = torch.stack([
-        float(sp.lambda_level) * torch.relu(float(sp.flat_target) - r) ** 2,
+        lam_flat * flat_penalty(S_all, measure, float(sp.flat_target), float(sp.get("flat_amp_target", 0.02))),
         float(sp.lambda_line) * torch.relu(float(sp.line_target) - linefrac) ** 2
         + float(sp.lambda_band) * torch.relu(float(sp.band_target) - bandfrac[:, 1]) ** 2,
         float(sp.lambda_struct) * torch.relu(c - float(sp.struct_cap)) ** 2
@@ -395,5 +443,6 @@ def soft_family_terms(S_all: torch.Tensor, S_win: torch.Tensor, band3: torch.Ten
     l_family = (q * pen).sum(dim=1).mean()
     qbar = q.mean(dim=0).clamp_min(1e-8)                    # soft population, sums to 1
     l_pop = (pop * (pop.clamp_min(1e-8).log() - qbar.log())).sum()
-    return l_family, l_pop, q, dict(r=r.detach(), c=c.detach(), linefrac=linefrac.detach(),
+    l_ent = -(q * q.clamp_min(1e-8).log()).sum(dim=1).mean()
+    return l_family, l_pop, l_ent, q, dict(r=r.detach(), c=c.detach(), linefrac=linefrac.detach(),
                                     bandfrac=bandfrac.detach(), pen=pen.detach())
