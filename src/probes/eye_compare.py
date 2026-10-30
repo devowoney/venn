@@ -61,6 +61,12 @@ PRESETS = {   # preset -> testbed -> variant -> run pattern (+ seeds); variants 
         "M=10": {"fixed_log": ".tmps/runs/obs_t8000_logflat_seed{s}", "soft_log": ".tmps/runs/obs_t8000_soft_pop5_logflat_seed{s}",
                  "soft_int": ".tmps/runs/obs_t8000_soft_popint_seed{s}", "seeds": range(5)},
     },
+    # W4 (D-034, 2026-10-30): the population is no longer pulled. pop5 = the 2026-10-29 soft default
+    # (lambda_pop 5, whole-channel target), pop0 = the new default (l_pop logged only)
+    "w4_nopop": {
+        "M=10": {"fixed_log": ".tmps/runs/obs_t8000_logflat_seed{s}", "pop5": ".tmps/runs/obs_t8000_soft_popint_seed{s}",
+                 "pop0": ".tmps/runs/obs_t8000_soft_pop0_seed{s}", "seeds": range(5)},
+    },
 }
 VCOL = ["#8c8b86", "#2a78d6", "#eb6834", "#1baf7a"]
 METRICS = [("recon_over_ceiling", "reconstruction R² / ceiling"), ("cyc_best", "cyclic: best single |corr|"),
@@ -138,6 +144,47 @@ def fig_q(run: str, labels: list, title: str, path: str):
     plt.close(fig)
 
 
+def fig_pop_time(groups: dict, variants: list, out: str):
+    """Soft population over training: mean q per family vs step, one line per seed, one panel per soft variant.
+
+    WHY: with the population pull removed (D-034) the question is whether the families stay populated or drift
+    into one family, and WHEN the split is decided. The final bars alone cannot show a slow drift.
+    Dashed lines = the 1/3/6 reference (K=16 -> 2/5/9 channels, as a share of K).
+    """
+    panels = []                                              # (group, variant, [(seed, steps, qbar[t,3])])
+    for grp, spec in groups.items():
+        for var in variants:
+            curves = []
+            for s in spec["seeds"]:
+                path = os.path.join(spec[var].format(s=s), "artifacts.npz")
+                if not os.path.exists(path):
+                    continue
+                art = np.load(path, allow_pickle=True)
+                if "q_snap" in art.files:                    # fixed-ladder runs have no q: skipped
+                    curves.append((s, art["snap_steps"], art["q_snap"].mean(axis=1)))
+            if curves:
+                panels.append((grp, var, curves))
+    if not panels:
+        return
+    fig, axes = plt.subplots(1, len(panels), figsize=(5.2 * len(panels), 3.6), squeeze=False)
+    for ax, (grp, var, curves) in zip(axes[0], panels):
+        for s, steps, qbar in curves:
+            for j, col in enumerate(FAM_COL.values()):
+                ax.plot(steps, qbar[:, j], color=col, lw=1.2, alpha=0.75)
+        for j, (f, col) in enumerate(FAM_COL.items()):      # reference share 1/3/6 rounded like the ladder (K=16)
+            ax.axhline([2, 5, 9][j] / 16, color=col, ls="--", lw=0.8)
+            ax.plot([], [], color=col, label=f)
+        ax.set_ylim(0, 1)
+        ax.set_xlabel("training step")
+        ax.set_ylabel("mean q over channels (share of K)")
+        ax.set_title(f"{grp} {var}: population over training", fontsize=9, loc="left")
+        ax.legend(fontsize=7, frameon=False, loc="upper right")
+    fig.suptitle("Soft family population vs training step (lines = seeds, dashed = 2/5/9 of 16)", fontsize=11)
+    fig.tight_layout()
+    fig.savefig(os.path.join(out, "pop_over_time.png"), dpi=110, bbox_inches="tight")
+    plt.close(fig)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--preset", default="soft_roles", choices=list(PRESETS))
@@ -171,16 +218,22 @@ def main():
                     res["q"] = art["q"].tolist()
                     res["agreement"] = float(np.mean([x == y for x, y in zip(fam_q, res["labels"])]))
                     res["q_population"] = {f: fam_q.count(f) for f in FAM_COL}
+                    # final l_pop = KL(2/5/9 of 16 || mean q): how far the population lands from the 1/3/6 reference
+                    # (an objective when lambda_pop > 0, a readout since D-034)
+                    pi, qbar = np.array([2, 5, 9]) / 16, np.clip(art["q"].mean(0), 1e-8, None)
+                    res["l_pop"] = float((pi * (np.log(pi) - np.log(qbar))).sum())
                     if s == 0:
                         fig_q(run, res["labels"], f"{grp} seed 0 ({var})",
                               os.path.join(a.out, f"q_{grp.replace('=', '')}_{var}_seed0.png"))
                 R[grp].append(res)
-                extra = (f" | argmax-q pop {res['q_population']} agree {res['agreement']:.2f}" if "q" in res else "")
+                extra = (f" | argmax-q pop {res['q_population']} agree {res['agreement']:.2f} l_pop {res['l_pop']:.3f}"
+                         if "q" in res else "")
                 extra += f" | stat r {res['stat_r']:.3f} n(r>=.98) {res['n_r98']}"
                 print(f"{grp} seed {s} {var:>6}: pop {res['population']} R2/C {res['recon_over_ceiling']:.3f} "
                       f"cyc best/dec {res['cyc_best']:.2f}/{res['cyc_dec']:.2f} cha best/dec "
                       f"{res['cha_best']:.2f}/{res['cha_dec']:.2f}{extra}", flush=True)
     fig_summary(R, variants, a.out)
+    fig_pop_time(groups, variants, a.out)
     with open(os.path.join(a.out, "eye_compare.json"), "w") as f:
         json.dump(R, f, indent=1)
 

@@ -1873,3 +1873,23 @@ User: add it to the eval with RMSE values -> `fan_figure()` in the eval probe wr
 RMSE % of size, channels pooled, h1/h8/h16/h64: stationary 0.5/0.6/1.1/3.5, cyclic 3.2/9.3/15.3/20.1, chaotic
 4.7/28.8/41.4/56.2.
 
+### 2026-10-30 — W4: remove the imposed family proportion (branch `feature-observer`)
+
+User: "Please see memory/structure_review.md. And let's start dev with W4 as mentioned." Plan agreed in plan mode;
+two extra rulings asked up front: soft becomes the default mode (the fixed ladder imposes 2/5/9 even harder), and the
+run scope stays M=10 × 5 seeds.
+
+- Records first: D-034 (decisions.md), SOP 02 soft section + v0 defaults table amended.
+- Code: `config/config.yaml` (`role_mode: soft`, `lambda_pop` 0), `src/train/train.py` (`l_pop` enters the loss only
+  if `lambda_pop > 0`, always logged), `src/train/spectral.py` docstring, `src/probes/eye_compare.py` (preset
+  `w4_nopop`, new `pop_over_time.png`, final `l_pop` readout).
+- Smoke run (300 steps, defaults, T=2000) already collapsed to 0/16/0 -- not representative (anneal squeezed).
+- Runs `.tmps/runs/obs_t8000_soft_pop0_seed{0..4}` (`launch_w4.sh`), probe `.tmps/eye_compare_w4/`. Result = F-29:
+  0/16/0, 0/16/0, 1/7/8, 0/15/1, 0/12/4, split frozen from step 50, stationary lost in 4/5 seeds, the "cyclic"
+  channels are duplicates of 1-2 periods (296/60, 140); R²/C still 0.99, chaotic best single |corr| 0.81 → 0.53.
+- Options shown: (a) keep 0 and go to W2, (b) restore the pull as default, (c) investigate the collapse first
+  (e.g. detach q in `L_family`). **User: "Then let soft and pop=5 as a default."** → `lambda_pop` back to 5,
+  `role_mode: soft` kept; D-034 revised, SOP 02 / config / code comments updated; W4 closed in structure_review.md.
+  `lambda_pop = 0` stays as an ablation (term skipped, `l_pop` logged). No commits (user handles git).
+- Next: W2 (predictability curve), one step at a time -- plan it with the user.
+

@@ -255,8 +255,8 @@ def main(cfg: DictConfig) -> None:
             w0 = torch.randint(0, t_fit - L + 1, (int(sp.n_win),), generator=g)   # window starts
             S_win = torch.stack([S_all[s0:s0 + L] for s0 in w0.tolist()])     # [n_win,L,K]
         if use_spec and soft:
-            # SOFT families: each channel's penalties are weighted by its inferred q_i, and L_pop keeps the
-            # population near the target. Same hinges and lambdas as the ladder (see soft_family_terms).
+            # SOFT families: each channel's penalties are weighted by its inferred q_i. Same hinges and lambdas as
+            # the ladder (see soft_family_terms).
             # COMMITMENT knob 1: anneal the family temperature, so q sharpens as the eye settles
             tau_end = sp.soft.get("tau_end")
             tau_now = _anneal(step, steps, float(sp.soft.tau), float(tau_end)) if tau_end else float(sp.soft.tau)
@@ -269,7 +269,12 @@ def main(cfg: DictConfig) -> None:
                 print(f"[train] grad match at init: |g_white|={g_w:.2e} |g_pop|={g_p:.2e} |g_ent|={g_e:.2e} "
                       f"-> lambda_pop ~ {float(g_w / g_p.clamp_min(1e-20)):.3g} (config {sp.soft.lambda_pop}), "
                       f"lambda_ent ~ {float(g_w / g_e.clamp_min(1e-20)):.3g} (config {sp.soft.get('lambda_ent', 0.0)})")
-            loss = loss + l_family + float(sp.soft.lambda_pop) * l_pop
+            loss = loss + l_family
+            # POPULATION pull toward 1/3/6 (default lambda_pop 5). WHY it stays: with lambda_pop = 0 the per-channel
+            # inference alone collapsed into duplicated cyclic channels (F-29, D-034). At 0 the term is skipped but
+            # l_pop is still logged (console `pop=`, TB loss/pop), so the free population can be watched.
+            if float(sp.soft.lambda_pop):
+                loss = loss + float(sp.soft.lambda_pop) * l_pop
             # COMMITMENT knob 2: per-channel decisiveness, so the population is carried by committed channels
             if float(sp.soft.get("lambda_ent", 0.0)):
                 loss = loss + float(sp.soft.lambda_ent) * l_ent

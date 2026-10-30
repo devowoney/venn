@@ -918,6 +918,40 @@ F-24, F-25. Full derivation of the score: `memory/reconstruction_score.md`.
 - **Known gap.** Slow rungs just above the flatness cut (amp_ratio 0.051-0.055, seeds 1/3/4) are labelled chaotic and
   therefore read in std units; labeller unchanged.
 
+## D-034 — Soft family inference is the default; the population pull STAYS (`lambda_pop = 5`) — W4 tested, kept
+
+**Date:** 2026-10-30. **Source:** user rulings on W4 in `memory/structure_review.md` ("remove the imposed target; use
+only the softmax inference") and, in the same session, "soft becomes default". Step 1 of the agreed order W4 → W2 →
+W1 → W6.
+
+- **Problem (W4).** Even with soft family assignment, the 2/5/9 split (K=16) was put in from outside:
+  `L_pop = KL(pop_target || mean q)` at `lambda_pop = 5` lands on the target every seed *because* it is pulled there.
+  The fixed rung ladder imposes it even more directly (each channel's role is set before training). Neither mode can
+  tell us how many eyes of each family the field actually asks for.
+- **Ruling.**
+  - `train.spectral.role_mode: soft` is the default. The `fixed` ladder stays as an ablation.
+  - `train.spectral.soft.lambda_pop: 0`. The family of each channel comes only from its own signal (`soft_q`), and
+    the population is whatever those inferences add up to.
+- **What stays.**
+  - `l_pop` is still computed and logged (console `pop=`, TensorBoard `loss/pop`): the population is **watched, not
+    steered**. The distance from 1/3/6 becomes a readout.
+  - `pop_target` stays in the config. It still drives the `fixed` ladder's `rung_roles`, and it is the reference the
+    logged `l_pop` is measured against.
+  - `lambda_pop = 5` reproduces the 2026-10-29 soft runs (`obs_t8000_soft_popint_seed*`).
+- **Known risk.** Pure emergence collapsed into one family before (F-5, F-12). That happened under mean slowness,
+  before the per-family penalties existed. If it happens again here, it is a result to look at, not a bug to patch
+  with a new pull.
+- **Test.** M=10, K=16, 5 seeds (`obs_t8000_soft_pop0_seed*`), compared with `pop5` = the soft runs above and
+  `fixed_log` = `obs_t8000_logflat_seed*`; probe preset `eye_compare --preset w4_nopop`.
+- **Outcome (F-29) and REVISED RULING (user, 2026-10-30, after the figures: "let soft and pop=5 as a default").**
+  Without the pull the eye collapsed (0/16/0, 0/16/0, 1/7/8, 0/15/1, 0/12/4; split decided by step 50) into
+  duplicated cyclic channels and lost the stationary family in 4/5 seeds. So:
+  - `role_mode: soft` stays the default (the fixed ladder is the ablation) -- that part of the ruling holds.
+  - `soft.lambda_pop: 5` is the default again. The "Ruling" bullets above (`lambda_pop = 0`) are superseded;
+    `lambda_pop = 0` is the ablation, kept in the code (the term is skipped, `l_pop` still logged).
+  - W4 is therefore **tested and closed as "proportion stays imposed for now"**. The open question moves to W2/W1:
+    whether a better family measure (predictability curve) or a deeper eye can make the population emerge.
+
 ## Numbering collisions with the encoder track
 
 The module-2 (`latent-predictor`) branch and the parallel `stationary-observer` (encoder) session both
@@ -1532,10 +1566,11 @@ time mean kept. Both lift pure-noise cells (std ~ obs_noise) to unit variance. S
 masks must apply it (`evaluate`, `observer_stability`, `plots_observer`); probes reading `artifacts.npz` `S` are
 consistent automatically. Reconstruction targets stay the generator's field.
 
-### Soft family assignment `train.spectral.role_mode` (feature flag, added 2026-10-29 — EXPERIMENT, not a default)
+### Soft family assignment `train.spectral.role_mode` (added 2026-10-29; `soft` is the DEFAULT since 2026-10-30, D-034)
 
-`fixed` (default) = the D-024 rung ladder: every channel's family is ASSIGNED before training (`rung_roles`).
-`soft` = the family is INFERRED from the channel's own signal, every step, with no new parameters (user, 2026-10-29):
+`fixed` (ablation; the default until 2026-10-30) = the D-024 rung ladder: every channel's family is ASSIGNED before
+training (`rung_roles`).
+`soft` (DEFAULT) = the family is INFERRED from the channel's own signal, every step, with no new parameters (user, 2026-10-29):
 
     q_stat = sigma(alpha (r_i - r0)/tau),  q_cyc = (1-q_stat) sigma(beta (c_i - 1/2)/tau),  q_chao = the rest
     (sum_f q_if = 1; a categorical = softmax over log q). Nested in the labeller's ORDER (flat first, then shape):
@@ -1551,7 +1586,9 @@ consistent automatically. Reconstruction targets stay the generator's field.
   fast); the per-channel cyclic octave of D-024 depended on role order and is dropped. q is NOT detached: a channel
   slides toward the family it is nearest to. That is the inference.
 - Population: `L_pop = KL(pi || mean_i q_i)`, pi = pop_target normalized. It stops every channel collapsing into one
-  family (pure emergence failed: F-5, F-12). User chose this over no target and over a learned head.
+  family (pure emergence failed: F-5, F-12). User chose this over no target and over a learned head (2026-10-29).
+  2026-10-30 (D-034, W4): tested at `lambda_pop = 0` -- the eye collapsed into duplicated cyclic channels (F-29) --
+  so the pull STAYS (default 5). At 0 the term is skipped and `L_pop` only logged (ablation).
 - "Must fluctuate" exemptions (`l_var`, `l_energy`) weight channels by `1 - q_stat` from the PREVIOUS step (detached).
 - Size ladder untouched (indexed by channel, role-free); slow is no longer tied to the biggest footprints.
 - Artifacts: `q` [K,3], `q_snap`; `roles` = argmax-q names (slow/cyclic/fast), so every probe keeps working.
@@ -1560,7 +1597,8 @@ consistent automatically. Reconstruction targets stay the generator's field.
   2026-10-29); `soft.lambda_ent` adds `mean_i H(q_i)` (ablation, default 0: it froze the untrained families).
   In every variant a channel's family is chosen in the first ~500 steps; the knobs sharpen, they do not redistribute.
 - Population pull: `soft.lambda_pop` 0.5 (the init gradient match) left cyclic over-filled (~8.5 vs 5); 5 lands on
-  the target every seed (M=10). **Default 5** (user 2026-10-29) -- a deliberate departure from gradient matching.
+  the target every seed (M=10). **Default 5** (user 2026-10-29, re-confirmed 2026-10-30 after W4 / F-29) -- a
+  deliberate departure from gradient matching. 0 = no pull: collapse into cyclic duplicates (F-29).
   `soft.pop_integer: true` (default) rounds the target to whole channels like `rung_roles` (K=16 -> 2/5/9): the
   fractional 1.6 stationary was met by one committed channel plus one parked exactly at the cut (1.0 + 0.6).
 
@@ -1591,6 +1629,7 @@ ladder pins the slow rungs to the largest footprints, and flatness falls with si
 | band ladder | `spectral.enable=true`, weights gradient-matched (D-024) | off (families do not redistribute at ANY K) |
 | stationary rungs | `spectral.slow_objective=level` + `L_level` (D-025: flat = constant) | `memory` (reads stationary as a slow DRIFT -- ablation) |
 | shape term | `spectral.shape_objective=structure`, `struct_rungs=fast`: `L_struct` caps fast rungs, `L_line` on cyclic rungs (D-027) | `struct_rungs=all` (cyclic rungs collapse onto one cycle); `line` (D-024, fast rungs drift to the boundary) |
+| family assignment | `spectral.role_mode=soft`, `soft.lambda_pop=5`: family inferred per channel, population pulled to 1/3/6 (D-034) | `role_mode=fixed` (rung ladder, roles assigned); `lambda_pop=0` (population free -> cyclic collapse, F-29) |
 | stationary mode | `data.stationary_constant=true` (rev3) | false = legacy OU drift at unit variance |
 | slowness gap | L2 | L1 |
 | optimizer / regime | Adam, pair-minibatch (B random consecutive pairs) | pure single-pair online |

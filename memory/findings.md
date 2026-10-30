@@ -1290,3 +1290,27 @@ Probes `.tmps/stationary_variability/` (`decompose_stationary.py`, `clean_from_o
    0.92-1.04; causality 0.0. Same long-lead error, slightly worse short-lead -> rejected as default (D-033).
 5. **Also seen:** at long leads the forecast does not shrink to the mean (s2 ch0 h64 corr 0.24, amp 0.66) -> RMSE
    slightly above climatology in std units; chaotic channels too (s0 ch7 1.08). Open.
+
+### F-29. Without the population pull, soft family inference collapses into duplicated cyclic channels (W4, 2026-10-30)
+
+**Setup.** M=10, K=16, T=10000, train `[0,8000)`, 8000 steps, 5 seeds. `role_mode=soft`, log flatness, tau 1 → 0.2,
+`lambda_pop = 0` (`obs_t8000_soft_pop0_seed*`) vs `lambda_pop = 5` (`obs_t8000_soft_popint_seed*`) and the fixed
+ladder (`obs_t8000_logflat_seed*`). Probe `eye_compare --preset w4_nopop` → `.tmps/eye_compare_w4/`
+(`eye_compare_summary.png`, `pop_over_time.png`, `q_M10_pop0_seed0.png`).
+
+1. **Population (stat/cyc/chao, labeller = argmax q, agreement 1.00 everywhere).** pop0: 0/16/0, 0/16/0, 1/7/8,
+   0/15/1, 0/12/4. pop5: 2/5/9 or 2/6/8 every seed. Final `l_pop` (KL from 2/5/9) pop0 2.2-4.6 except seed 2 (0.05).
+2. **Decided by step 50, then frozen.** Mean q is flat from step ~50 to 8000 in every seed; the tau anneal sharpens
+   each channel's choice but never moves a channel between families (pop5 decides by ~100 steps too).
+3. **The stationary family is never reached.** Untrained channels sit at r_max 0.6-0.8, so q_stat ≈ 0 and no term
+   pulls any channel toward flatness. Only seed 2 (r_max 0.81 at init) grew one (r 0.979).
+4. **"Cyclic" = duplicates, not more cycles.** Dominant period per channel, seed 0: all 16 at 296 or 60; seed 1: 15/16
+   at 140. pop5 seed 0 spreads over ~8 periods (15 … 2667). Each channel slides to the family whose penalty is
+   cheapest at init, and a clean line is cheapest -- the same one-cycle collapse D-027 measured for `L_struct`.
+5. **Collective encoding unchanged, specialization lost.** R²/C 0.99 in all three variants; all-K decode cyclic 0.82,
+   chaotic 0.87 (vs 0.88). Best single |corr| chaotic 0.53 (pop0) vs 0.81 (pop5) / 0.80 (fixed): no channel is
+   dedicated to a chaotic mode.
+
+**Decision (user, 2026-10-30): "let soft and pop=5 as a default."** Soft mode is the default, `lambda_pop = 5`
+restored (D-034). The proportion stays imposed until a better family measure (W2) or a deeper eye (W1) is tested for
+emergence.

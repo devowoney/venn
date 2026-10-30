@@ -416,7 +416,9 @@ def soft_family_terms(S_all: torch.Tensor, S_win: torch.Tensor, band3: torch.Ten
     onto the period-60 cycle (D-027 measurement).
 
     L_family = mean_i sum_f q_if * pen_if   -- q NOT detached: each channel slides toward its nearest family.
-    L_pop    = KL(pop || mean_i q_i)        -- keeps the families populated (emergence alone failed, F-5/F-12).
+    L_pop    = KL(pop || mean_i q_i)        -- keeps the families populated. Emergence alone failed under mean
+               slowness (F-5/F-12) AND under these per-family penalties: with lambda_pop = 0 every channel slides
+               to the cheapest family at init, mostly duplicated cyclic lines (F-29, D-034).
     L_ent    = mean_i H(q_i)                -- decisiveness. WHY: L_pop sees only the MEAN of q, and the first soft
                runs met it by spreading q_stat 0.1-0.5 over many channels with none actually flat. Low entropy
                per channel forces the target share to be carried by channels that commit.

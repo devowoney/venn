@@ -96,24 +96,29 @@ train:
                         # >= ~2x slow_period_min, and << T so window starts still randomize.
     n_win: 4            # windows averaged per step (periodogram variance is high with just one)
     pop_target: [1, 3, 6]   # rung proportions = the CLAUDE.md target population, scaled to K.
-                            # K=16 -> 2 slow / 5 cyclic / 9 fast.
-    # --- SOP 02 soft family assignment (EXPERIMENT 2026-10-29). fixed = the rung ladder above (DEFAULT);
-    # soft = no assigned role: each channel's family q_i is inferred from its own signal every step,
-    # weights that family's penalties, and L_pop = KL(pop_target || mean q) keeps the families populated.
-    role_mode: fixed
+                            # K=16 -> 2 slow / 5 cyclic / 9 fast. Used by the FIXED ladder (roles) and, in soft
+                            # mode, the target that L_pop pulls the inferred population toward (lambda_pop).
+    # --- SOP 02 soft family assignment (2026-10-29; soft is the DEFAULT since 2026-10-30, D-034 / W4).
+    # soft = no assigned role: each channel's family q_i is inferred from its own signal every step and weights
+    # that family's penalties; L_pop = KL(pop_target || mean q) pulls the family PROPORTION toward 1/3/6.
+    # fixed = the rung ladder above (ablation): roles assigned before training in the pop_target proportion.
+    role_mode: soft
     soft:
       alpha: 5.0          # flatness logit scale: q_stat = sigmoid(alpha (r - r0) / tau). Soft on purpose,
-                          # so channels far from flat (untrained r 0.03-0.65) still feel the population pull
+                          # so channels far from flat (untrained r 0.03-0.65) still feel a gradient toward a family
       alpha_log: 2.0      # flat_measure=log: q_stat = sigmoid(alpha_log (log 0.05 - log amp_ratio) / tau). At tau 0.2:
                           # amp 0.036 (r 0.965) -> q_stat 0.96, amp 0.05 -> 0.5 (the labeller's cut)
       beta: 10.0          # structure logit scale: cyclic vs chaotic = sigmoid(beta (c - 1/2) / tau)
       tau: 1.0            # softmax temperature (lower = harder families)
       r0: 0.952           # flat cut = the labeller's FLAT_THR 0.05 (r = 1/(1+amp_ratio))
-      pop_integer: true   # population target in WHOLE channels (1/3/6 rounded like the ladder: K=16 -> 2/5/9).
-                          # false = raw fractions (1.6 stationary was met by 1 committed + 1 parked at the cut)
-      lambda_pop: 5.0     # DEFAULT 5 (user 2026-10-29), 10x the init gradient match (0.5: |g_white|=1.9e-3,
-                          # |g_pop|=3.6e-3, K=16 seed 0). Measured M=10, 5 seeds: 0.5 left cyclic over-filled (~8.5
-                          # vs 5); 5 lands on the 2/5/9 target every seed with capture equal to the fixed ladder
+      pop_integer: true   # population target in WHOLE channels (1/3/6 rounded like the ladder: K=16 -> 2/5/9); only
+                          # pulls when lambda_pop > 0. false = raw fractions (1.6 stationary was met by 1 committed +
+                          # 1 parked at the cut)
+      lambda_pop: 5.0     # DEFAULT 5 (user 2026-10-29, kept 2026-10-30 after W4 / F-29): lands on 2/5/9 every seed
+                          # (M=10). ABLATION 0 = population free, l_pop logged only: the eye collapses into
+                          # duplicated cyclic channels and loses the stationary family in 4/5 seeds (F-29).
+                          # 0.5 (the init gradient match, |g_white|=1.9e-3 |g_pop|=3.6e-3) left cyclic over-filled
+                          # (~8.5 vs 5)
       # --- COMMITMENT (2026-10-29, after the first soft runs): L_pop only matches the MEAN of q, and the eye met
       # the stationary share by spreading q_stat 0.1-0.5 over many channels instead of making one flat.
       tau_end: 0.2        # anneal tau -> tau_end (geometric, like the mask temperature); null = no anneal.
