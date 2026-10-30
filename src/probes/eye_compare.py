@@ -26,10 +26,11 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
 
+from src.probes.family import PRED_FAMILY_NAMES, label_predictability  # noqa: E402
 from src.probes.input_norm_compare import score_eye  # noqa: E402
 
-FAM_COL = {"stationary": "#1baf7a", "cyclic": "#4a3aa7", "chaotic": "#e87ba4"}
-ROLE2FAM = {"slow": "stationary", "cyclic": "cyclic", "fast": "chaotic"}
+FAM_COL = {"stationary": "#1baf7a", "cyclic": "#4a3aa7", "chaotic": "#e87ba4", "noise": "#8c8b86"}   # noise: D-035
+ROLE2FAM = {"slow": "stationary", "cyclic": "cyclic", "fast": "chaotic", "noise": "noise"}
 PRESETS = {   # preset -> testbed -> variant -> run pattern (+ seeds); variants drawn in this order
     "soft_roles": {
         "M=10": {"fixed": ".tmps/runs/obs_t8000_seed{s}", "soft": ".tmps/runs/obs_t8000_soft_seed{s}", "seeds": range(5)},
@@ -67,6 +68,11 @@ PRESETS = {   # preset -> testbed -> variant -> run pattern (+ seeds); variants 
         "M=10": {"fixed_log": ".tmps/runs/obs_t8000_logflat_seed{s}", "pop5": ".tmps/runs/obs_t8000_soft_popint_seed{s}",
                  "pop0": ".tmps/runs/obs_t8000_soft_pop0_seed{s}", "seeds": range(5)},
     },
+    # W2 step 2b (D-035, 2026-10-30): predictability family measure, 4 families, NO population target (user)
+    "w2_pred": {
+        "M=10": {"fixed_log": ".tmps/runs/obs_t8000_logflat_seed{s}", "pop5": ".tmps/runs/obs_t8000_soft_popint_seed{s}",
+                 "pred0": ".tmps/runs/obs_t8000_pred_seed{s}", "seeds": range(5)},
+    },
 }
 VCOL = ["#8c8b86", "#2a78d6", "#eb6834", "#1baf7a"]
 METRICS = [("recon_over_ceiling", "reconstruction R² / ceiling"), ("cyc_best", "cyclic: best single |corr|"),
@@ -75,7 +81,7 @@ METRICS = [("recon_over_ceiling", "reconstruction R² / ceiling"), ("cyc_best", 
 
 
 def fig_summary(R: dict, variants: list, out: str):
-    fig, axes = plt.subplots(len(R), len(METRICS) + 1, figsize=(3.0 * (len(METRICS) + 1), 3.3 * len(R)),
+    fig, axes = plt.subplots(len(R), len(METRICS) + 2, figsize=(3.0 * (len(METRICS) + 2), 3.3 * len(R)),
                              squeeze=False)
     for g, (grp, rows) in enumerate(R.items()):
         for j, (key, title) in enumerate(METRICS):
@@ -90,25 +96,31 @@ def fig_summary(R: dict, variants: list, out: str):
             ax.set_xticks(range(len(variants)), variants, fontsize=8)
             ax.set_ylim(0, 1.12)
             ax.set_title(f"{grp}: {title}", fontsize=9, loc="left")
-        ax = axes[g, -1]                                     # family population by the labeller, stacked
-        for v, var in enumerate(variants):
-            rows_v = [r for r in rows if r["variant"] == var]
-            if not rows_v:
-                continue
-            bottom = 0.0
-            for f, col in FAM_COL.items():
-                h = np.mean([r["population"][f] for r in rows_v])
-                ax.bar(v, h, 0.65, bottom=bottom, color=col, edgecolor="white", linewidth=2, label=f if v == 0 else None)
-                if h > 0.4:
-                    ax.text(v, bottom + h / 2, f"{h:.1f}", ha="center", va="center", fontsize=7, color="white")
-                bottom += h
-        ax.set_xticks(range(len(variants)), variants, fontsize=8)
-        ax.set_title(f"{grp}: population (labeller; target 1/3/6 ×K/10)", fontsize=9, loc="left")
-        ax.legend(fontsize=7, frameon=False, loc="upper right")
+        for ax, key, ttl in [(axes[g, -2], "population", "spectral labeller"),
+                             (axes[g, -1], "pred_population", "PREDICTABILITY labeller (D-035)")]:
+            _pop_bars(ax, rows, variants, key, f"{grp}: population, {ttl}")
     fig.suptitle("Eye variants, validation [8000,10000) (dots = seeds)", fontsize=12)
     fig.tight_layout()
     fig.savefig(os.path.join(out, "eye_compare_summary.png"), dpi=110, bbox_inches="tight")
     plt.close(fig)
+
+
+def _pop_bars(ax, rows, variants, key, title):
+    """Stacked mean family population per variant, under one labeller (`key` = population | pred_population)."""
+    for v, var in enumerate(variants):
+        rows_v = [r for r in rows if r["variant"] == var and key in r]
+        if not rows_v:
+            continue
+        bottom = 0.0
+        for f, col in FAM_COL.items():
+            h = np.mean([r[key].get(f, 0) for r in rows_v])
+            ax.bar(v, h, 0.65, bottom=bottom, color=col, edgecolor="white", linewidth=2, label=f if v == 0 else None)
+            if h > 0.4:
+                ax.text(v, bottom + h / 2, f"{h:.1f}", ha="center", va="center", fontsize=7, color="white")
+            bottom += h
+    ax.set_xticks(range(len(variants)), variants, fontsize=8)
+    ax.set_title(title, fontsize=9, loc="left")
+    ax.legend(fontsize=7, frameon=False, loc="upper right")
 
 
 def fig_q(run: str, labels: list, title: str, path: str):
@@ -120,7 +132,7 @@ def fig_q(run: str, labels: list, title: str, path: str):
     gs = fig.add_gridspec(3, 8, height_ratios=[1.3, 1, 1], hspace=0.6, wspace=0.35)
     ax = fig.add_subplot(gs[0, :])
     bottom = np.zeros(K)
-    for j, (f, col) in enumerate(FAM_COL.items()):
+    for j, (f, col) in list(enumerate(FAM_COL.items()))[: q.shape[1]]:   # 3 (spectral) or 4 (predictability)
         ax.bar(range(K), q[:, j], 0.75, bottom=bottom, color=col, edgecolor="white", linewidth=1.5, label=f"q_{f[:4]}")
         bottom += q[:, j]
     for i, lab in enumerate(labels):                          # the post-hoc labeller's verdict, for comparison
@@ -132,14 +144,14 @@ def fig_q(run: str, labels: list, title: str, path: str):
     ax.legend(fontsize=8, frameon=False, ncol=3, loc="upper right", bbox_to_anchor=(1, 1.25))
     for i in range(K):
         a = fig.add_subplot(gs[1 + i // 8, i % 8])
-        for j, col in enumerate(FAM_COL.values()):
+        for j, col in list(enumerate(FAM_COL.values()))[: q.shape[1]]:
             a.plot(steps, qs[:, i, j], color=col, lw=1.5)
         a.set_ylim(-0.03, 1.03)
         a.set_title(f"ch {i}", fontsize=8)
         a.tick_params(labelsize=6)
         if i % 8:
             a.set_yticklabels([])
-    fig.suptitle(title + " — q over training steps (green stat, violet cyc, pink chao)", fontsize=11)
+    fig.suptitle(title + " — q over training steps (green stat, violet cyc, pink chao, grey noise)", fontsize=11)
     fig.savefig(path, dpi=110, bbox_inches="tight")
     plt.close(fig)
 
@@ -169,10 +181,11 @@ def fig_pop_time(groups: dict, variants: list, out: str):
     fig, axes = plt.subplots(1, len(panels), figsize=(5.2 * len(panels), 3.6), squeeze=False)
     for ax, (grp, var, curves) in zip(axes[0], panels):
         for s, steps, qbar in curves:
-            for j, col in enumerate(FAM_COL.values()):
+            for j, col in list(enumerate(FAM_COL.values()))[: qbar.shape[1]]:
                 ax.plot(steps, qbar[:, j], color=col, lw=1.2, alpha=0.75)
         for j, (f, col) in enumerate(FAM_COL.items()):      # reference share 1/3/6 rounded like the ladder (K=16)
-            ax.axhline([2, 5, 9][j] / 16, color=col, ls="--", lw=0.8)
+            if j < 3:                                        # noise has no reference share (D-035)
+                ax.axhline([2, 5, 9][j] / 16, color=col, ls="--", lw=0.8)
             ax.plot([], [], color=col, label=f)
         ax.set_ylim(0, 1)
         ax.set_xlabel("training step")
@@ -182,6 +195,31 @@ def fig_pop_time(groups: dict, variants: list, out: str):
     fig.suptitle("Soft family population vs training step (lines = seeds, dashed = 2/5/9 of 16)", fontsize=11)
     fig.tight_layout()
     fig.savefig(os.path.join(out, "pop_over_time.png"), dpi=110, bbox_inches="tight")
+    plt.close(fig)
+
+
+def fig_pred_plane(R: dict, variants: list, out: str):
+    """Every eye's channels on the predictability plane (g, p_long), one panel per variant, coloured by the
+    predictability label. Dashed = the cuts p 0.5 / g 0.1 (D-035). Shows whether training moved channels to the
+    family corners or left them on the mixture continuum (F-30 item 5)."""
+    grp_rows = [(g, r) for g, rows in R.items() for r in rows]
+    fig, axes = plt.subplots(1, len(variants), figsize=(4.8 * len(variants), 4.4), squeeze=False, sharey=True)
+    for ax, var in zip(axes[0], variants):
+        for f, col in FAM_COL.items():
+            pts = [(gg, p) for _, r in grp_rows if r["variant"] == var
+                   for gg, p, lab in zip(r["g"], r["p_long"], r["pred_labels"]) if lab == f]
+            if pts:
+                ax.scatter(*zip(*pts), s=30, color=col, edgecolor="white", lw=1.2, label=f"{f} ({len(pts)})")
+        ax.axhline(0.5, color="#52514e", ls="--", lw=0.8)
+        ax.axvline(0.1, color="#52514e", ls="--", lw=0.8)
+        ax.set_xlabel("g (nonlinear gain, leads 1-22)")
+        ax.set_title(var, fontsize=10, loc="left")
+        ax.grid(alpha=0.2)
+        ax.legend(fontsize=7, frameon=False, loc="upper right")
+    axes[0, 0].set_ylabel("p_long = 1 - e_long(64)")
+    fig.suptitle("Trained channels on the predictability plane, all seeds (colour = predictability label)", fontsize=11)
+    fig.tight_layout()
+    fig.savefig(os.path.join(out, "pred_plane.png"), dpi=110, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -213,27 +251,36 @@ def main():
                 st = [i for i, lab in enumerate(res["labels"]) if lab == "stationary"]
                 res["stat_r"] = float(r[st].mean()) if st else float("nan")
                 res["n_r98"] = int((r >= 0.98).sum())
+                # D-035: every eye is ALSO read by the predictability labeller (full series, same torch scores as the
+                # loss), so spectral-trained and predictability-trained eyes are compared under both readouts
+                plab, pd = label_predictability(art["S"])
+                res["pred_labels"], res["p_long"], res["g"] = plab, pd["p_long"].tolist(), pd["g"].tolist()
+                res["pred_population"] = {f: plab.count(f) for f in PRED_FAMILY_NAMES}
                 if "q" in art.files:
                     fam_q = [ROLE2FAM[r] for r in art["roles"]]
+                    nf = art["q"].shape[1]
+                    ref = res["labels"] if nf == 3 else plab          # the labeller that speaks the eye's measure
                     res["q"] = art["q"].tolist()
-                    res["agreement"] = float(np.mean([x == y for x, y in zip(fam_q, res["labels"])]))
+                    res["agreement"] = float(np.mean([x == y for x, y in zip(fam_q, ref)]))
                     res["q_population"] = {f: fam_q.count(f) for f in FAM_COL}
-                    # final l_pop = KL(2/5/9 of 16 || mean q): how far the population lands from the 1/3/6 reference
-                    # (an objective when lambda_pop > 0, a readout since D-034)
-                    pi, qbar = np.array([2, 5, 9]) / 16, np.clip(art["q"].mean(0), 1e-8, None)
-                    res["l_pop"] = float((pi * (np.log(pi) - np.log(qbar))).sum())
+                    # final l_pop = KL(2/5/9[/0] of 16 || mean q): how far the population lands from the 1/3/6
+                    # reference (an objective when lambda_pop > 0, a readout otherwise); noise has no share
+                    pi = np.array([2, 5, 9, 0][:nf]) / 16
+                    qbar = np.clip(art["q"].mean(0), 1e-8, None)
+                    res["l_pop"] = float((pi[pi > 0] * (np.log(pi[pi > 0]) - np.log(qbar[pi > 0]))).sum())
                     if s == 0:
-                        fig_q(run, res["labels"], f"{grp} seed 0 ({var})",
+                        fig_q(run, ref, f"{grp} seed 0 ({var})",
                               os.path.join(a.out, f"q_{grp.replace('=', '')}_{var}_seed0.png"))
                 R[grp].append(res)
                 extra = (f" | argmax-q pop {res['q_population']} agree {res['agreement']:.2f} l_pop {res['l_pop']:.3f}"
                          if "q" in res else "")
-                extra += f" | stat r {res['stat_r']:.3f} n(r>=.98) {res['n_r98']}"
+                extra += f" | stat r {res['stat_r']:.3f} n(r>=.98) {res['n_r98']} | pred pop {res['pred_population']}"
                 print(f"{grp} seed {s} {var:>6}: pop {res['population']} R2/C {res['recon_over_ceiling']:.3f} "
                       f"cyc best/dec {res['cyc_best']:.2f}/{res['cyc_dec']:.2f} cha best/dec "
                       f"{res['cha_best']:.2f}/{res['cha_dec']:.2f}{extra}", flush=True)
     fig_summary(R, variants, a.out)
     fig_pop_time(groups, variants, a.out)
+    fig_pred_plane(R, variants, a.out)
     with open(os.path.join(a.out, "eye_compare.json"), "w") as f:
         json.dump(R, f, indent=1)
 

@@ -1893,3 +1893,20 @@ run scope stays M=10 × 5 seeds.
   `lambda_pop = 0` stays as an ablation (term skipped, `l_pop` logged). No commits (user handles git).
 - Next: W2 (predictability curve), one step at a time -- plan it with the user.
 
+#### Same session — W2 step 2a: calibrate the predictability score (observer only)
+
+- Plan: I first called the per-channel ridge a "predictor". The user asked whether this was about the predictor, and
+  wanted the observer done this session. Clarified that it is an observer-side measuring stick. Renamed it the
+  **predictability score**, and saved a memory note on the naming.
+- Caveat raised and accepted: a linear score is spectral (Wiener–Kolmogorov). User: calibrate linear AND nonlinear,
+  and include the trained pop5 channels.
+- Probe `src/probes/predictability.py`. A quick run on seed 0 confirmed the caveat. An embedding sweep showed the
+  long-window / short-window trade-off, so the probe uses two windows. Full run (3 seeds + 80 trained channels +
+  cross-checks) → `.tmps/predictability/`. Result = F-30: the rule is 90/90 correct on test signals; the current
+  labeller is 36/36 wrong on the quasi-periodic and noise classes.
+- User rulings:
+  - Score design and cuts accepted as is.
+  - Noise-like = a **4th family "noise"**, "better decomposed into the other families afterward by next layer eyes;
+    the signal which remains at noise can be considered as noise itself, biases, etc."
+- Next: plan 2b (D-035, 4-family `family_q`).
+

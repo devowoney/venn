@@ -401,6 +401,17 @@ def soft_q(S_all: torch.Tensor, sp, tau: float | None = None) -> torch.Tensor:
     return q
 
 
+def flat_vote(S_all: torch.Tensor, sp, tau: float) -> tuple[torch.Tensor, torch.Tensor]:
+    """The stationary family's vote q_stat [K] and weighted penalty [K], in the configured flatness measure.
+
+    Shared by the predictability measure (D-035), which changes only how the MOVING channels are split.
+    """
+    measure = str(sp.get("flat_measure", "ratio"))
+    lam_flat = float(sp.lambda_level_log) if measure == "log" else float(sp.lambda_level)
+    pen = lam_flat * flat_penalty(S_all, measure, float(sp.flat_target), float(sp.get("flat_amp_target", 0.02)))
+    return soft_q(S_all, sp, tau)[:, 0], pen
+
+
 def soft_family_terms(S_all: torch.Tensor, S_win: torch.Tensor, band3: torch.Tensor, sp, pop: torch.Tensor,
                       tau: float | None = None):
     """Every family's own penalty, weighted by the channel's q instead of a fixed role mask.

@@ -27,7 +27,8 @@ from src.data.synthetic import GenConfig, generate_field, normalize_input  # noq
 from src.models.encoder import SelectionEncoder            # noqa: E402
 from src.train.spectral import (FAMILY_ROLE, band_plan, flat_ratio, level_term,  # noqa: E402
                                memory_term, rung_roles, soft_family_terms, spectral_terms,
-                               structure_share, structure_term, family_q, soft_q)
+                               structure_share, structure_term, family_q, soft_q, flat_vote)
+from src.train.predictability import PRED_FAMILIES, make_rff, pred_family_terms  # noqa: E402
 
 
 def _anneal(step: int, total: int, t0: float, t1: float) -> float:
@@ -125,6 +126,7 @@ def main(cfg: DictConfig) -> None:
         # each channel's family q_i is INFERRED from its own signal and weights that family's penalties.
         # The fixed `roles` above are then unused by the loss (kept only so the fixed-mode code stays intact).
         soft = use_spec and str(sp.get("role_mode", "fixed")) == "soft"
+        use_pred = False                                   # D-035 measure; only read in soft mode
         if soft:
             band3 = band_plan(3, int(sp.win_len), list(FAMILY_ROLE), float(sp.slow_period_min),
                               float(sp.fast_period_max), float(sp.cyclic_period_max),
@@ -139,7 +141,15 @@ def main(cfg: DictConfig) -> None:
                 pop = pop / pop.sum()              # target population as fractions (1/3/6 -> .1/.3/.6)
             flat_rungs, w_dyn = False, torch.ones(K, device=device)   # exemptions follow q from step 1 on
             q_snaps = []
-            print(f"[train] SOFT family assignment | pop target {pop.tolist()} | soft={dict(sp.soft)}")
+            # D-035: the predictability measure splits the MOVING channels into cyclic / chaotic / NOISE. Noise has no
+            # share in the population target (it is what the deeper eyes should later decompose, W1).
+            use_pred = str(sp.get("family_measure", "spectral")) == "predictability"
+            fam_names = PRED_FAMILIES if use_pred else FAMILY_ROLE
+            if use_pred:
+                pop = torch.cat([pop, torch.zeros(1, device=device)])
+                rff = make_rff(int(sp.pred.m_short), int(sp.pred.n_rff), int(cfg.seed), device=device)
+            print(f"[train] SOFT family assignment | measure={sp.get('family_measure', 'spectral')} "
+                  f"pop target {pop.tolist()} | soft={dict(sp.soft)}")
 
     writer = SummaryWriter(log_dir="tb")                   # under the Hydra run dir (.tmps/runs/..)
     print(f"[train] device={device} K={K} B={B} steps={steps} "
@@ -260,7 +270,20 @@ def main(cfg: DictConfig) -> None:
             # COMMITMENT knob 1: anneal the family temperature, so q sharpens as the eye settles
             tau_end = sp.soft.get("tau_end")
             tau_now = _anneal(step, steps, float(sp.soft.tau), float(tau_end)) if tau_end else float(sp.soft.tau)
-            l_family, l_pop, l_ent, q, sdiag = soft_family_terms(S_all, S_win, band3, sp, pop, tau=tau_now)
+            if use_pred:
+                q_stat, pen_flat = flat_vote(S_all, sp, tau_now)
+                l_family, l_pop, l_ent, q, sdiag = pred_family_terms(S_all, q_stat, pen_flat, sp, pop, rff, tau_now)
+                sdiag["r"] = flat_ratio(S_all).detach()
+            else:
+                l_family, l_pop, l_ent, q, sdiag = soft_family_terms(S_all, S_win, band3, sp, pop, tau=tau_now)
+            if step == 0 and use_pred:
+                # D-019 gradient match of each predictability hinge against L_white: suggested lambda = current * ratio
+                g_w = torch.autograd.grad(l_white, enc.logits, retain_graph=True)[0].norm()
+                for nm, term in sdiag["terms"].items():       # each hinge as if EVERY channel were in its family
+                    g_j = torch.autograd.grad(term.mean(), enc.logits, retain_graph=True, allow_unused=True)[0]
+                    g_j = g_j.norm() if g_j is not None else torch.zeros((), device=device)
+                    print(f"[train] pred grad match at init: |g_white|={g_w:.2e} |g_{nm}|={g_j:.2e} "
+                          f"-> lambda_{nm} x{float(g_w / g_j.clamp_min(1e-20)):.3g} of the configured weight")
             if step == 0:
                 # gradient match (the D-019 convention): report |g_pop|, |g_ent| vs |g_white| at init
                 g_w = torch.autograd.grad(l_white, enc.logits, retain_graph=True)[0].norm()
@@ -383,14 +406,21 @@ def main(cfg: DictConfig) -> None:
                 writer.add_scalar("q/mean_stat", qm[0].item(), step)
                 writer.add_scalar("q/mean_cyc", qm[1].item(), step)
                 writer.add_scalar("q/mean_chao", qm[2].item(), step)
+                if use_pred:                                   # D-035: the 4th family + the two scores behind the vote
+                    writer.add_scalar("q/mean_noise", qm[3].item(), step)
+                    writer.add_scalar("pred/p_long_mean", sdiag["p_long"].mean().item(), step)
+                    writer.add_scalar("pred/g_mean", sdiag["g"].mean().item(), step)
                 writer.add_scalar("q/entropy", ent.item(), step)
                 writer.add_scalar("loss/family", l_family.item(), step)
                 writer.add_scalar("loss/pop", l_pop.item(), step)
                 hard = q.detach().argmax(dim=1)
-                print(f"  step {step:5d} | soft q: mean {qm[0]:.2f}/{qm[1]:.2f}/{qm[2]:.2f} "
-                      f"argmax {int((hard == 0).sum())}/{int((hard == 1).sum())}/{int((hard == 2).sum())} "
+                nf = q.shape[1]                                # 3 families (spectral) or 4 (predictability)
+                extra = (f" p_long {sdiag['p_long'].min():.2f}..{sdiag['p_long'].max():.2f}"
+                         f" g {sdiag['g'].min():+.2f}..{sdiag['g'].max():+.2f}" if use_pred else "")
+                print(f"  step {step:5d} | soft q: mean {'/'.join(f'{qm[j]:.2f}' for j in range(nf))} "
+                      f"argmax {'/'.join(str(int((hard == j).sum())) for j in range(nf))} "
                       f"H={ent:.2f} family={l_family.item():.4f} pop={l_pop.item():.4f} "
-                      f"r_max={r_flat.max():.2f} tau={tau_now:.2f}")
+                      f"r_max={r_flat.max():.2f} tau={tau_now:.2f}{extra}")
             if rho_lag is not None:
                 writer.add_scalar("band/rho_lag_max", rho_lag.max().item(), step)
             if sp_diag is not None:
@@ -428,9 +458,16 @@ def main(cfg: DictConfig) -> None:
             # final inferred families on the TRAINING slice (what the loss saw); `roles` becomes the argmax name,
             # so every probe that reads `roles` (evaluate, plots_observer, ssh_to_sst, ...) keeps working
             S_fit = enc(field_fit)
-            q_fin = soft_q(S_fit, sp, tau_now).cpu().numpy()   # final (annealed) temperature, configured measure
-            roles = [FAMILY_ROLE[j] for j in q_fin.argmax(axis=1)]
-            soft_out = dict(q=q_fin, **(dict(q_snap=np.stack(q_snaps)) if q_snaps else {}))
+            if use_pred:                                       # same scores + vote as the loss (D-035)
+                q_stat, pen_flat = flat_vote(S_fit, sp, tau_now)
+                _, _, _, q_t, fin = pred_family_terms(S_fit, q_stat, pen_flat, sp, pop, rff, tau_now)
+                q_fin = q_t.cpu().numpy()
+                pred_out = dict(p_long=fin["p_long"].cpu().numpy(), g=fin["g"].cpu().numpy())
+            else:
+                q_fin = soft_q(S_fit, sp, tau_now).cpu().numpy()   # final (annealed) temperature, configured measure
+                pred_out = {}
+            roles = [fam_names[j] for j in q_fin.argmax(axis=1)]
+            soft_out = dict(q=q_fin, **pred_out, **(dict(q_snap=np.stack(q_snaps)) if q_snaps else {}))
             print(f"[train] final soft families (argmax q): {roles}")
     np.savez("artifacts.npz", S=S, masks=masks, masks_init=masks_init, families=np.array(fams),
              truth_amp=truth_amp, truth_phi=truth_phi, truth_scale=truth_scale,

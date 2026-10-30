@@ -952,6 +952,47 @@ W1 → W6.
   - W4 is therefore **tested and closed as "proportion stays imposed for now"**. The open question moves to W2/W1:
     whether a better family measure (predictability curve) or a deeper eye can make the population emerge.
 
+## D-035 — Family measure = PREDICTABILITY (W2): cyclic / chaotic / noise decided by p_long and g; a 4th family "noise"
+
+**Date:** 2026-10-30. **Source:** F-30 (step 2a calibration) and the user's rulings. Score design and cuts
+"accept as is". Noise is a 4th family, "better decomposed into the other families afterward by next layer eyes; the
+signal which remains at noise can be considered as noise itself, biases, etc." Noise gets no penalty. Module 2 is
+untouched. The 2b runs use no population target.
+
+- **Problem (W2).** `structure_share` is spectral shape. It calls same-spectrum noise, OU, white noise and
+  quasi-periodic signals all chaotic (36/36 wrong in F-30). A LINEAR predictability score is spectral too
+  (Wiener–Kolmogorov).
+- **Measure.** These are per-channel scores on the channel's OWN past: an observer-side measuring stick, not module 2.
+  They are closed-form ridge regressions, fitted on the first half of the training slice and scored on the second,
+  with e = MSE / var.
+  - `p_long = 1 − e_long(64)`: LINEAR ridge on a long delay window (16 lags × 8 steps, span 120). Is the channel
+    predictable at the forecast horizon?
+  - `g = mean_{h=1..22}(e_lin(h) − e_nl(h))`: on a short window (8 lags × 2 steps, span 14), the gain of a nonlinear
+    ridge (linear + 512 random Fourier features) over the linear one. Does the channel carry deterministic structure
+    beyond its spectrum? 22 steps ≈ one Lyapunov time (F-23).
+  - Why two windows: F-30 item 2. A long window is needed for multi-tone long-lead predictability; the nonlinear gain
+    vanishes on it.
+- **Families (nested in this ORDER, like the labeller):** flat (the unchanged flatness gate) → cyclic if `p_long ≥ 0.5`
+  → chaotic if `g ≥ 0.1` → otherwise **noise**.
+  - Soft version: `q_cyc = (1−q_stat) σ(β_p(p_long−0.5)/τ)`, `q_chao = (1−q_stat)(1−σ_p) σ(β_g(g−0.1)/τ)`,
+    `q_noise` = the rest.
+  - Post-hoc labeller: `family.label_predictability`, the same torch scores. `family.label_family` (3 families,
+    spectral) is unchanged, because module 2 uses it.
+- **Penalties in the same quantities** (the objective and the readout must agree):
+  - stationary: the flatness hinge (unchanged)
+  - cyclic: `relu(0.9 − p_long)²`
+  - chaotic: `relu(0.2 − g)² + relu(p_long − 0.3)²`
+  - noise: **none**. It carries only the general terms; decomposing it is the deeper eyes' job (W1).
+  - Weights are gradient-matched to `L_white` at init (D-019).
+- **Flag.** `train.spectral.family_measure: spectral | predictability`. The default stays `spectral` until the user
+  decides from the 2b runs. Only read in `role_mode: soft`.
+- **2b test.** M=10, K=16, 5 seeds, `family_measure=predictability`, `lambda_pop=0` (`obs_t8000_pred_seed*`), against
+  pop5 (`obs_t8000_soft_popint_seed*`). Every eye is scored with both labellers. `l_pop` is still logged: target
+  [2,5,9,0]/16 (noise has no share).
+- **Known risks.** (1) The cyclic hinge credits ANY predictable signal, so cyclic channels may pile onto the cleanest
+  cycle (D-027 saw this with `L_struct`). (2) Without a pull, the W4 collapse (F-29) may repeat. Either would be a
+  result.
+
 ## Numbering collisions with the encoder track
 
 The module-2 (`latent-predictor`) branch and the parallel `stationary-observer` (encoder) session both
@@ -1601,6 +1642,15 @@ training (`rung_roles`).
   deliberate departure from gradient matching. 0 = no pull: collapse into cyclic duplicates (F-29).
   `soft.pop_integer: true` (default) rounds the target to whole channels like `rung_roles` (K=16 -> 2/5/9): the
   fractional 1.6 stationary was met by one committed channel plus one parked exactly at the cut (1.0 + 0.6).
+
+### Family measure `train.spectral.family_measure` (added 2026-10-30, D-035; default `spectral`)
+
+`spectral` = the families above (structure share, line/band hinges), 3 families.
+`predictability` = 4 families (stationary / cyclic / chaotic / noise). The flatness gate is unchanged, then
+`p_long` (linear, span 120, lead 64) decides cyclic, then `g` (nonlinear gain, span 14, leads 1–22) decides chaotic.
+Penalties are hinges in the same quantities, and noise has none. Code: `src/train/predictability.py`
+(`pred_scores`, `pred_family_q`, `pred_family_terms`); knobs in `train.spectral.pred`. `roles` artifacts use the
+name `noise` for the 4th family. Calibration and cuts: F-30.
 
 ### Flatness measure `train.spectral.flat_measure` (added 2026-10-29; `log` is the DEFAULT, user)
 

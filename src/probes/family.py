@@ -40,8 +40,11 @@ reported as `labeller_truth_accuracy` -- if that is not 1.0, believe the probe o
 """
 from __future__ import annotations
 
+import os
+
 import numpy as np
 
+_REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 FAMILIES = ("stationary", "cyclic", "chaotic")
 
 # defaults sit mid-gap in the truth calibration above; exposed so the probe can sweep them
@@ -205,6 +208,33 @@ def amp_ratio(x: np.ndarray) -> float:
     """
     x = np.asarray(x, dtype=np.float64)
     return float(x.std() / (abs(x.mean()) + 1e-12))
+
+
+PRED_FAMILY_NAMES = ("stationary", "cyclic", "chaotic", "noise")
+
+
+def label_predictability(S: np.ndarray, flat_thr: float = FLAT_THR, pc=None, seed: int = 0) -> tuple[list, dict]:
+    """D-035 labeller for channel series S [T,K] (or one series [T]): 4 families, same torch scores as the loss.
+
+    Order: FLAT (amp_ratio < flat_thr, unchanged) -> cyclic if p_long >= p_cut -> chaotic if g >= g_cut -> noise.
+    `label_family` (3 families, spectral) is kept unchanged on purpose: module 2 still uses it (user 2026-10-30).
+    Returns (labels, dict(p_long, g, amp_ratio)) per channel.
+    """
+    import torch
+    from omegaconf import OmegaConf
+
+    from src.train.predictability import make_rff, pred_scores
+    if pc is None:
+        pc = OmegaConf.load(os.path.join(_REPO, "config", "config.yaml")).train.spectral.pred
+    S = np.asarray(S, dtype=np.float64)
+    S = S[:, None] if S.ndim == 1 else S
+    with torch.no_grad():
+        p_long, g = pred_scores(torch.from_numpy(S), pc, make_rff(int(pc.m_short), int(pc.n_rff), seed))
+    p_long, g = p_long.numpy(), g.numpy()
+    amp = np.array([amp_ratio(S[:, k]) for k in range(S.shape[1])])
+    labels = ["stationary" if a < flat_thr else "cyclic" if p >= float(pc.p_cut) else
+              "chaotic" if gg >= float(pc.g_cut) else "noise" for a, p, gg in zip(amp, p_long, g)]
+    return labels, dict(p_long=p_long, g=g, amp_ratio=amp)
 
 
 def label_series(x: np.ndarray, **kw) -> str:

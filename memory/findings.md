@@ -1314,3 +1314,40 @@ ladder (`obs_t8000_logflat_seed*`). Probe `eye_compare --preset w4_nopop` → `.
 **Decision (user, 2026-10-30): "let soft and pop=5 as a default."** Soft mode is the default, `lambda_pop = 5`
 restored (D-034). The proportion stays imposed until a better family measure (W2) or a deeper eye (W1) is tested for
 emergence.
+
+### F-30. A predictability score separates chaos from same-spectrum noise; spectral shape and the linear score cannot (W2 step 2a, 2026-10-30)
+
+**Setup.** Probe `src/probes/predictability.py` → `.tmps/predictability/` (`curves.png`, `planes.png`, `checks.png`,
+`predictability.json`). No training. Signals:
+- truth modes, seeds 0–2, T=10000 (constant mode skipped: the flatness gate owns it)
+- truth + 0.05 noise
+- phase-randomized surrogates of the Lorenz modes (same spectrum, no determinism)
+- OU τ=5, a 3-tone quasi-periodic signal (60/97/157), white noise
+- the 80 trained pop5 channels (`obs_t8000_soft_popint_seed*`)
+
+Scores are per channel on its own past: fit on the first half, test on the second, e(h) = MSE/var, h = 1…64.
+
+1. **The linear score is spectral, as Wiener–Kolmogorov says.** Lorenz and its surrogate give the same d_lin
+   (0.950 / 0.946) and the same e_lin(h) curve. Only the nonlinear score (random-Fourier-feature ridge) separates them:
+   gain g = mean_{h≤22}(e_lin − e_nl) is 0.18–0.41 for Lorenz (36/36, with or without noise) and ≤ 0 for the
+   surrogates, OU and white noise (30/30).
+2. **Two windows are needed (embedding sweep, seed 0).** A long-lead score needs a long LINEAR window: the 3-tone
+   signal reaches p(64) 0.33 at span 14, 0.81 at span 56, 1.00 at span 120. The nonlinear gain needs a SHORT window:
+   Lorenz g is +0.37 at span 14, +0.18 at span 56, and −0.03 at span 120. Chosen: p_long = linear on span 120 (16×8);
+   g = linear vs nonlinear on span 14 (8×2).
+3. **Rule (flatness gate first):** cyclic if p_long ≥ 0.5, else chaotic if g ≥ 0.1, else noise-like. It is correct
+   on 90/90 truth and test signals: cyclic 18 and quasi-periodic 6 → cyclic, Lorenz 36 → chaotic, noise 30 →
+   noise-like. The current `structure_share` labeller calls quasi-periodic, surrogates, OU and white noise ALL chaotic
+   (36/36 wrong).
+4. **Cross-checks.**
+   - The 0-1 test separates regular from irregular signals (cyclic 0.32, QP 0.14) but gives ≈1 for chaos AND noise.
+   - Rosenstein λ fails here (surrogate 0.078 > Lorenz 0.064 > OU 0.047).
+   - The surrogate rank test on g agrees with g: Lorenz p = 0.05 (the floor) 36/36; noise mostly not significant.
+     It means nothing for cycles (g ≈ 0 on both sides).
+5. **Trained channels.** They lie on a continuum between the cyclic and chaotic corners (the W1 mixtures). 72/80 keep
+   their label; 3 chaotic → cyclic; 5 → noise-like (4 chaotic, 1 cyclic; seeds 1–4, at most 2 per seed).
+
+**Decisions (user, 2026-10-30):**
+- Score design accepted as is (p_long cut 0.5, g cut 0.1).
+- Noise-like becomes a **4th family, "noise"**. In the user's words, it "better [be] decomposed into the other
+  families afterward by next layer eyes" (W1). What still remains noise is treated as noise or bias.

@@ -127,6 +127,34 @@ train:
                           # reconstruction unchanged. Only read when role_mode=soft.
       lambda_ent: 0.0     # decisiveness: + lambda_ent * mean_i H(q_i). 0 = off. ABLATION: at 0.5 it froze each
                           # channel's untrained family by step ~300 (stationary 0.2/seed at M=10)
+    # --- D-035 (W2, 2026-10-30): WHICH QUANTITY decides cyclic / chaotic in soft mode -------------------
+    # spectral = structure share + line/band hinges, 3 families (DEFAULT until the 2b runs are judged).
+    # predictability = 4 families: flat gate (unchanged) -> cyclic if p_long >= p_cut -> chaotic if g >= g_cut
+    #   -> noise. p_long = linear ridge on the channel's own long past, lead h_long; g = nonlinear-over-linear gain
+    #   on a short past, leads 1..h_gain. Calibrated on truth + test signals in F-30 (90/90 correct).
+    family_measure: spectral
+    pred:
+      m_short: 8          # short window 8 lags x 2 steps (span 14): where the nonlinear gain sees chaos
+      s_short: 2
+      m_long: 16          # long window 16 lags x 8 steps (span 120): a 3-tone signal reaches p 1.00 (0.33 at span 14)
+      s_long: 8
+      h_long: 64          # p_long lead = the forecast horizon
+      h_gain: 22          # g averaged over leads 1..22 = ~one Lyapunov time of the testbed's chaos (F-23)
+      n_rff: 512          # random Fourier features of the nonlinear ridge (fixed per run, seed = run seed)
+      lam_lin: 1.0e-6     # ridge strength x n_fit, as calibrated in F-30
+      lam_nl: 1.0e-4
+      p_cut: 0.5          # cyclic vs not (F-30: cyclic/QP 0.99-1.00, chaos/noise <= 0.22)
+      g_cut: 0.1          # chaotic vs noise (F-30: Lorenz 0.18-0.41, noise <= 0)
+      beta_p: 10.0        # logit scales of the soft vote (same role as soft.beta)
+      beta_g: 25.0
+      p_target: 0.9       # cyclic: be predictable at the horizon
+      g_target: 0.2       # chaotic: carry at least the weakest truth Lorenz mode's determinism
+      p_cap: 0.3          # chaotic: not long-predictable (truth Lorenz <= 0.22)
+      # GRADIENT-matched to lambda_white at init (D-019), measured M=10, K=16, seed 0 (2026-10-30):
+      # |g_white|=1.9e-3, |g_pcyc|=6.9e-4, |g_g|=1.0e-4, |g_pcap|=1.6e-3 at weight 1 -> 2.8 / 18.6 / 1.2
+      lambda_pcyc: 2.8
+      lambda_g: 18.6
+      lambda_pcap: 1.2
     slow_period_min: 128.0  # slow rungs: put power at periods >= this
     fast_period_max: 24.0   # fast rungs: put power at periods <= this
     cyclic_period_max: 320.0  # cyclic rungs tile [fast_period_max, this] -- INTENTIONALLY
