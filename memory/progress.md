@@ -1910,3 +1910,40 @@ run scope stays M=10 × 5 seeds.
     the signal which remains at noise can be considered as noise itself, biases, etc."
 - Next: plan 2b (D-035, 4-family `family_q`).
 
+
+#### Same session (continued 2026-10-30 → 2026-11-02) — W2 step 2b and follow-ups; new observer default (D-036)
+
+- **2b planned and built.**
+  - D-035; `src/train/predictability.py` (torch scores, used by both the loss and the labeller);
+    `family.label_predictability`; `eye_compare` with 4 families; flag `train.spectral.family_measure`.
+  - The torch labeller reproduces the F-30 probe: 30/30 labels, p_long identical, g within 0.03.
+  - User rulings: noise has no penalty; module 2 untouched; no population target in the 2b runs. I had to
+    re-check this last one: the user first said "we removed the population target" while the default was 5.
+  - Weights gradient-matched at init: 2.8 / 18.6 / 1.2.
+- **pred0** (`obs_t8000_pred_seed*`): collapsed toward cyclic (0.4/11.4/1.2/3.0). I offered (a) pull,
+  (b) readout only, (c) investigate. User: wants (a), but slow down.
+  - Q1, why is the cyclic hinge satisfied so fast? Untrained blends are already long-predictable; the target is
+    met by mixtures; the q-shortcut; noise is free; the first vote freezes.
+  - Q2: a 1/3/6 target uses the truth and is unusable on a real field. User agreed, and chose a **data-estimated
+    target** (not built yet).
+- User asked for a step-by-step explanation of kernel training and family assignment (mask = non-negative pooling
+  footprint; multiscale random start; six general forces; measure → vote → penalty, with the two gradient paths;
+  self-reinforcing vote). They needed no visualization. Then: "let's test tighten cyclic".
+- **pred_tight** (CLI `p_cut 0.8`, `p_target 0.97`): pure cycles, but 5/16 channels went to noise. User asked what
+  "noise is free" means → explained (zero penalty = an absorbing, rewarded exit).
+- User: "noise is not a mixed signal; it can be decomposed afterward" → asked for a capture visualization.
+  `src/probes/capture.py` (truth regression on SSH raw + SST AR1 views, validation): 0 % unexplained everywhere.
+  The noise channels are cycle + chaos mixtures, or single chaotic modes seen through SST, which g misses (F-30
+  calibration gap). User: "not bad, normal to see the real system signal in the first layer; let's try penalized
+  noise" → variant "push toward structure".
+- **pred_noisepen** (`pred.noise_penalty: structure` = `min(pen_cyc, pen_chao)`): noise 25 → 0. Seeds 2–4 grew
+  real chaotic channels (seed 2: all 6 chaotic modes + 3 cycles); seeds 0–1 went 16/16 cyclic (init dependence).
+- User asked which configuration to choose → recommended pred_noisepen (the best truth-free one; pop5 = oracle
+  reference). Explained each knob's effect on the observer. **User: "make it default and record it"** → D-036
+  (config defaults: `family_measure predictability`, `p_cut 0.8`, `p_target 0.97`, `noise_penalty structure`,
+  `lambda_pop 0`), F-31, the SOP subsection and the v0 defaults table. No commits (user handles git).
+- **Next candidates:**
+  - warm-up before the first family vote (init dependence)
+  - a stationary family that can emerge
+  - g calibration on SST-smoothed chaos
+  - the data-estimated population target

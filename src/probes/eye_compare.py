@@ -25,6 +25,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
+from omegaconf import OmegaConf  # noqa: E402
 
 from src.probes.family import PRED_FAMILY_NAMES, label_predictability  # noqa: E402
 from src.probes.input_norm_compare import score_eye  # noqa: E402
@@ -72,6 +73,17 @@ PRESETS = {   # preset -> testbed -> variant -> run pattern (+ seeds); variants 
     "w2_pred": {
         "M=10": {"fixed_log": ".tmps/runs/obs_t8000_logflat_seed{s}", "pop5": ".tmps/runs/obs_t8000_soft_popint_seed{s}",
                  "pred0": ".tmps/runs/obs_t8000_pred_seed{s}", "seeds": range(5)},
+    },
+    # W2 follow-up (2026-11-02): TIGHTER cyclic criterion only (p_cut 0.5 -> 0.8, p_target 0.9 -> 0.97), still no
+    # population target; read every eye with --p_cut 0.8
+    "w2_tight": {
+        "M=10": {"pop5": ".tmps/runs/obs_t8000_soft_popint_seed{s}", "pred0": ".tmps/runs/obs_t8000_pred_seed{s}",
+                 "pred_tight": ".tmps/runs/obs_t8000_pred_tight_seed{s}", "seeds": range(5)},
+    },
+    # + noise pushed toward structure (pred.noise_penalty: structure, 2026-11-02); read with --p_cut 0.8
+    "w2_noisepen": {
+        "M=10": {"pop5": ".tmps/runs/obs_t8000_soft_popint_seed{s}", "pred_tight": ".tmps/runs/obs_t8000_pred_tight_seed{s}",
+                 "pred_noisepen": ".tmps/runs/obs_t8000_pred_noisepen_seed{s}", "seeds": range(5)},
     },
 }
 VCOL = ["#8c8b86", "#2a78d6", "#eb6834", "#1baf7a"]
@@ -198,7 +210,7 @@ def fig_pop_time(groups: dict, variants: list, out: str):
     plt.close(fig)
 
 
-def fig_pred_plane(R: dict, variants: list, out: str):
+def fig_pred_plane(R: dict, variants: list, out: str, p_cut: float = 0.5):
     """Every eye's channels on the predictability plane (g, p_long), one panel per variant, coloured by the
     predictability label. Dashed = the cuts p 0.5 / g 0.1 (D-035). Shows whether training moved channels to the
     family corners or left them on the mixture continuum (F-30 item 5)."""
@@ -210,7 +222,7 @@ def fig_pred_plane(R: dict, variants: list, out: str):
                    for gg, p, lab in zip(r["g"], r["p_long"], r["pred_labels"]) if lab == f]
             if pts:
                 ax.scatter(*zip(*pts), s=30, color=col, edgecolor="white", lw=1.2, label=f"{f} ({len(pts)})")
-        ax.axhline(0.5, color="#52514e", ls="--", lw=0.8)
+        ax.axhline(p_cut, color="#52514e", ls="--", lw=0.8)       # the labeller's cyclic cut used for this comparison
         ax.axvline(0.1, color="#52514e", ls="--", lw=0.8)
         ax.set_xlabel("g (nonlinear gain, leads 1-22)")
         ax.set_title(var, fontsize=10, loc="left")
@@ -227,7 +239,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--preset", default="soft_roles", choices=list(PRESETS))
     ap.add_argument("--out", default=".tmps/eye_compare")
+    ap.add_argument("--p_cut", type=float, default=None,
+                    help="cyclic cut of the predictability labeller (default: config). ONE labeller reads all eyes")
     a = ap.parse_args()
+    pc = OmegaConf.load("config/config.yaml").train.spectral.pred
+    if a.p_cut is not None:
+        pc.p_cut = a.p_cut
     os.makedirs(a.out, exist_ok=True)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     groups = PRESETS[a.preset]
@@ -253,7 +270,7 @@ def main():
                 res["n_r98"] = int((r >= 0.98).sum())
                 # D-035: every eye is ALSO read by the predictability labeller (full series, same torch scores as the
                 # loss), so spectral-trained and predictability-trained eyes are compared under both readouts
-                plab, pd = label_predictability(art["S"])
+                plab, pd = label_predictability(art["S"], pc=pc)
                 res["pred_labels"], res["p_long"], res["g"] = plab, pd["p_long"].tolist(), pd["g"].tolist()
                 res["pred_population"] = {f: plab.count(f) for f in PRED_FAMILY_NAMES}
                 if "q" in art.files:
@@ -280,7 +297,7 @@ def main():
                       f"{res['cha_best']:.2f}/{res['cha_dec']:.2f}{extra}", flush=True)
     fig_summary(R, variants, a.out)
     fig_pop_time(groups, variants, a.out)
-    fig_pred_plane(R, variants, a.out)
+    fig_pred_plane(R, variants, a.out, float(pc.p_cut))
     with open(os.path.join(a.out, "eye_compare.json"), "w") as f:
         json.dump(R, f, indent=1)
 

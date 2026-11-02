@@ -1351,3 +1351,45 @@ Scores are per channel on its own past: fit on the first half, test on the secon
 - Score design accepted as is (p_long cut 0.5, g cut 0.1).
 - Noise-like becomes a **4th family, "noise"**. In the user's words, it "better [be] decomposed into the other
   families afterward by next layer eyes" (W1). What still remains noise is treated as noise or bias.
+
+### F-31. Predictability eye without a population target: the measure works, the free dynamics need a tight cyclic cut and a non-free noise family (W2 step 2b + follow-ups, 2026-10-30 → 2026-11-02)
+
+**Setup.** M=10, K=16, T=10000, train `[0,8000)`, 8000 steps, 5 seeds, `role_mode=soft`,
+`family_measure=predictability` (D-035), `lambda_pop = 0`. Compared with pop5 (`obs_t8000_soft_popint_seed*`:
+spectral measure + the oracle 1/3/6 pull). Every eye is read by the predictability labeller.
+- Probes: `eye_compare --preset w2_pred / w2_tight / w2_noisepen` → `.tmps/eye_compare_w2*/`;
+  `src/probes/capture.py` → `.tmps/capture_w2_tight/`, `.tmps/capture_w2_noisepen/`.
+
+Population (mean of 5 seeds; stat/cyc/chao/noise, cut-0.8 labeller) and best single |corr|:
+
+| eye | runs | population | chaotic best | cyclic best | R²/C |
+|---|---|---|---|---|---|
+| pop5 (oracle pull) | `obs_t8000_soft_popint_seed*` | 2.0 / 4.4 / 7.8 / 1.8 | 0.81 | 0.74 | 0.99 |
+| pred0 (cut 0.5, target 0.9, noise free) | `obs_t8000_pred_seed*` | 0.4 / 11.4 / 1.2 / 3.0 | 0.53 | 0.80 | 0.99 |
+| pred_tight (cut 0.8, target 0.97) | `obs_t8000_pred_tight_seed*` | 0 / 9.6 / 1.4 / 5.0 | 0.55 | 0.79 | 0.99 |
+| **pred_noisepen** (+ noise pays its nearest family) | `obs_t8000_pred_noisepen_seed*` | **0 / 12.0 / 4.0 / 0** | 0.49 | 0.82 | 0.99 |
+
+1. **The measure works as a readout.** On the pulled spectral eyes it agrees closely with the spectral labeller:
+   chaotic channels at g 0.1–0.4, cyclic channels at p_long ≈ 1.
+2. **pred0 collapses toward cyclic.** Untrained channels are half-domain blends that are already long-predictable
+   (p_long 0.6–0.9 at step 0), so the first vote is "cyclic", the cyclic hinge (target 0.9) is met by mixtures, and
+   the vote freezes by ~step 200.
+3. **Tight cyclic (cut 0.8, target 0.97) makes cyclic channels pure** (p_long 0.9–1.0). But the channels pushed out
+   of cyclic land in the penalty-free noise family (mean 5.0; 10/16 in seeds 2 and 3).
+4. **No noise channel is real noise** (capture probe: 0 % unexplained everywhere; the 0.05 observation noise
+   averages away in a pooled channel). They are of two kinds:
+   - cycle + chaos mixtures (user: normal for a first layer)
+   - single chaotic modes seen through SST. The 20-step AR1 low-pass hides g: in both generator seeds the 4 x/y-type
+     chaotic modes drop from g 0.38–0.40 (SSH view) to 0.04–0.08 (SST view) → noise; the 2 z-type modes stay
+     chaotic (0.23–0.32). F-30 had calibrated g on the raw (SSH) views only.
+5. **Noise pushed toward structure removes the noise family** (25 → 0 channels). Where it goes depends on the start:
+   - **seeds 2–4** grow real chaotic channels: 0/8/8/0, 0/11/5/0, 0/9/7/0; chaotic best 0.78 / 0.55 / 0.67.
+     In seed 2, all 6 chaotic modes and all 3 cycles have their own channels.
+   - **seeds 0–1** end as 16 cyclic channels: duplicates of the 3 cycles (P60 ×6, P140 ×5, P300 ×4 in seed 0);
+     chaotic best 0.22. Every channel started near cyclic, which is its nearest family.
+6. **No stationary channel** appears in any predictability run, and collective coverage is unchanged
+   (R²/C 0.99; all-K decode cyclic 0.82, chaotic 0.88).
+
+**Decision (user, 2026-11-02):** the pred_noisepen settings become the default (D-036). Open: init dependence (next
+candidate: warm-up before the first vote), no stationary family, SST-smoothed chaos, and the data-estimated
+population target.

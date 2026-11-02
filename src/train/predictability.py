@@ -97,6 +97,7 @@ def pred_family_terms(S_all: torch.Tensor, q_stat: torch.Tensor, pen_flat: torch
       chaotic    : lambda_g * relu(g_target - g)^2 + lambda_pcap * relu(p_long - p_cap)^2
                    "be deterministic beyond your spectrum, and not long-predictable"
       noise      : 0 -- what is left; decomposing it is the deeper eyes' job (W1, user 2026-10-30)
+                   or, with `pred.noise_penalty: structure`, min(cyclic, chaotic) -- pushed to its nearest family
     """
     pc = sp.pred
     p_long, g = pred_scores(S_all, pc, rff)
@@ -104,7 +105,15 @@ def pred_family_terms(S_all: torch.Tensor, q_stat: torch.Tensor, pen_flat: torch
     terms = dict(pcyc=float(pc.lambda_pcyc) * torch.relu(float(pc.p_target) - p_long) ** 2,
                  g=float(pc.lambda_g) * torch.relu(float(pc.g_target) - g) ** 2,
                  pcap=float(pc.lambda_pcap) * torch.relu(p_long - float(pc.p_cap)) ** 2)
-    pen = torch.stack([pen_flat, terms["pcyc"], terms["g"] + terms["pcap"], torch.zeros_like(p_long)], dim=1)  # [K,4]
+    pen_cyc, pen_chao = terms["pcyc"], terms["g"] + terms["pcap"]
+    if str(pc.get("noise_penalty", "none")) == "structure":
+        # noise pays what its NEAREST real family would pay (user 2026-11-02, "push toward structure"): the channel
+        # feels that family's hinge, and noise is never cheaper than it, so becoming noise is no longer rewarded.
+        # Not min(pcyc, g) alone: that would still undercut the chaotic family (which also pays the p_long cap).
+        pen_noise = torch.minimum(pen_cyc, pen_chao)
+    else:
+        pen_noise = torch.zeros_like(p_long)                   # D-035 default: noise is free (W1 decomposes it)
+    pen = torch.stack([pen_flat, pen_cyc, pen_chao, pen_noise], dim=1)   # [K,4]
     l_family = (q * pen).sum(dim=1).mean()
     qbar = q.mean(dim=0).clamp_min(1e-8)
     l_pop = (pop * (pop.clamp_min(1e-8).log() - qbar.log())).sum()   # noise share 0 in pop: contributes nothing

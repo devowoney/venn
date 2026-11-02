@@ -920,6 +920,9 @@ F-24, F-25. Full derivation of the score: `memory/reconstruction_score.md`.
 
 ## D-034 — Soft family inference is the default; the population pull STAYS (`lambda_pop = 5`) — W4 tested, kept
 
+> **Population pull superseded by D-036 (2026-11-02):** `lambda_pop = 0` by default, because 1/3/6 is the testbed
+> truth and unknowable on a real field. Soft mode stays the default.
+
 **Date:** 2026-10-30. **Source:** user rulings on W4 in `memory/structure_review.md` ("remove the imposed target; use
 only the softmax inference") and, in the same session, "soft becomes default". Step 1 of the agreed order W4 → W2 →
 W1 → W6.
@@ -992,6 +995,49 @@ untouched. The 2b runs use no population target.
 - **Known risks.** (1) The cyclic hinge credits ANY predictable signal, so cyclic channels may pile onto the cleanest
   cycle (D-027 saw this with `L_struct`). (2) Without a pull, the W4 collapse (F-29) may repeat. Either would be a
   result.
+- **Follow-ups (2026-11-02, flags; defaults unchanged until the user decides).**
+  - *Tight cyclic* (`pred.p_cut 0.8`, `pred.p_target 0.97`; CLI override only). Cyclic channels became pure (p_long
+    0.9–1.0), but the channels pushed out of cyclic landed in the penalty-free noise family (mean 0/9.6/1.4/5.0).
+  - *Capture probe* (`src/probes/capture.py`). No noise channel is real noise: 0 % unexplained. Two kinds:
+    - cycle + chaos mixtures (user: normal for a first layer)
+    - single chaotic modes seen through the SST low-pass, where the chaos score g is missed (4/6 truth chaotic modes
+      score noise in their SST view). A calibration gap in F-30.
+  - *Noise pushed toward structure* (`pred.noise_penalty: structure`; default `none` = the D-035 ruling).
+    `pen_noise = min(pen_cyc, pen_chao)`: a noise channel pays what its NEAREST real family would pay. So it feels
+    that family's hinge, and is never cheaper than it (no reward for becoming noise). User ruling 2026-11-02:
+    "let's try penalized noise", variant "push toward structure".
+
+## D-036 — Observer default = predictability measure + tight cyclic + noise pushed to structure, NO population target
+
+**Date:** 2026-11-02. **Source:** user, after the step-2b follow-ups (F-31): "let's make it default and record it".
+Supersedes the population-pull part of D-034 (`lambda_pop = 5`) and the default-measure part of D-035 (`spectral`).
+
+- **Why.** The 1/3/6 population target is the testbed's TRUTH composition. It cannot be known on a real physical field
+  (user, 2026-11-02), so pulling toward it (pop5, D-034) is an oracle, not a method. Among the truth-free
+  configurations tested, this is the only one that gives dedicated cyclic AND chaotic channels without sinking
+  channels into noise (F-31).
+- **Defaults (`config/config.yaml`, `train.spectral`):**
+
+  | knob | value | what it does to the observer |
+  |---|---|---|
+  | `role_mode` | `soft` | family inferred per channel every step (unchanged since D-034) |
+  | `family_measure` | `predictability` | families by p_long (linear, span 120, lead 64) and g (nonlinear gain, span 14, leads 1–22); 4 families (D-035) |
+  | `pred.p_cut` | `0.8` | a channel is cyclic only if ≥ 80 % of it is predictable 64 steps ahead; mixtures (0.5–0.8) and untrained blends drop out |
+  | `pred.p_target` | `0.97` | a cyclic channel is pushed until ~97 % predictable, i.e. it sheds its mixed-in chaos (pure cycles, p 0.9–1.0) |
+  | `pred.noise_penalty` | `structure` | noise pays `min(pen_cyc, pen_chao)`: pushed to its nearest real family, never cheaper than it (no reward for being unclassifiable) |
+  | `soft.lambda_pop` | `0` | no population target; `l_pop` (vs 2/5/9/0) is still logged as a readout |
+
+- **Ablations kept in the code:** `family_measure=spectral`; `lambda_pop=5` (oracle pull); `p_cut 0.5 / p_target 0.9`;
+  `noise_penalty=none` (noise free, the D-035 ruling); `role_mode=fixed`.
+- **Known limits (open):**
+  1. **Init dependence.** The first vote is cast on untrained half-domain blends and frozen by ~step 200. In seeds
+     0–1 every channel starts near cyclic and the eye ends as 16 duplicated cycles. Next candidate fix: a warm-up
+     with no family terms before the first vote.
+  2. **No stationary channel** in any predictability run: nothing pushes an untrained channel toward flatness.
+  3. **g under-scores chaos seen through the SST low-pass** (4/6 truth chaotic modes; an F-30 calibration gap).
+  4. A data-estimated population target (user's choice over the oracle, 2026-11-02) is not built yet.
+- The cyclic weight `lambda_pcyc = 2.8` was gradient-matched at the old target. Under 0.97 / 0.8 its init gradient is
+  0.73× `|g_white|`; it was kept, since the F-31 runs used it.
 
 ## Numbering collisions with the encoder track
 
@@ -1643,14 +1689,16 @@ training (`rung_roles`).
   `soft.pop_integer: true` (default) rounds the target to whole channels like `rung_roles` (K=16 -> 2/5/9): the
   fractional 1.6 stationary was met by one committed channel plus one parked exactly at the cut (1.0 + 0.6).
 
-### Family measure `train.spectral.family_measure` (added 2026-10-30, D-035; default `spectral`)
+### Family measure `train.spectral.family_measure` (added 2026-10-30, D-035; default `predictability` since 2026-11-02, D-036)
 
-`spectral` = the families above (structure share, line/band hinges), 3 families.
+`spectral` (ablation since D-036) = the families above (structure share, line/band hinges), 3 families.
 `predictability` = 4 families (stationary / cyclic / chaotic / noise). The flatness gate is unchanged, then
 `p_long` (linear, span 120, lead 64) decides cyclic, then `g` (nonlinear gain, span 14, leads 1–22) decides chaotic.
 Penalties are hinges in the same quantities, and noise has none. Code: `src/train/predictability.py`
 (`pred_scores`, `pred_family_q`, `pred_family_terms`); knobs in `train.spectral.pred`. `roles` artifacts use the
 name `noise` for the 4th family. Calibration and cuts: F-30.
+Defaults since D-036: `pred.p_cut 0.8`, `pred.p_target 0.97`, `pred.noise_penalty: structure` (noise pays
+`min(pen_cyc, pen_chao)`), with `soft.lambda_pop 0`. Evidence and limits: F-31.
 
 ### Flatness measure `train.spectral.flat_measure` (added 2026-10-29; `log` is the DEFAULT, user)
 
@@ -1679,7 +1727,7 @@ ladder pins the slow rungs to the largest footprints, and flatness falls with si
 | band ladder | `spectral.enable=true`, weights gradient-matched (D-024) | off (families do not redistribute at ANY K) |
 | stationary rungs | `spectral.slow_objective=level` + `L_level` (D-025: flat = constant) | `memory` (reads stationary as a slow DRIFT -- ablation) |
 | shape term | `spectral.shape_objective=structure`, `struct_rungs=fast`: `L_struct` caps fast rungs, `L_line` on cyclic rungs (D-027) | `struct_rungs=all` (cyclic rungs collapse onto one cycle); `line` (D-024, fast rungs drift to the boundary) |
-| family assignment | `spectral.role_mode=soft`, `soft.lambda_pop=5`: family inferred per channel, population pulled to 1/3/6 (D-034) | `role_mode=fixed` (rung ladder, roles assigned); `lambda_pop=0` (population free -> cyclic collapse, F-29) |
+| family assignment | `spectral.role_mode=soft`, `family_measure=predictability`, `pred.p_cut=0.8`, `pred.p_target=0.97`, `pred.noise_penalty=structure`, `soft.lambda_pop=0`: 4 families inferred per channel, no population target (D-036) | `family_measure=spectral`; `lambda_pop=5` (oracle pull to 1/3/6, D-034); `noise_penalty=none`; `role_mode=fixed` |
 | stationary mode | `data.stationary_constant=true` (rev3) | false = legacy OU drift at unit variance |
 | slowness gap | L2 | L1 |
 | optimizer / regime | Adam, pair-minibatch (B random consecutive pairs) | pure single-pair online |

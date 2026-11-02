@@ -114,9 +114,9 @@ train:
       pop_integer: true   # population target in WHOLE channels (1/3/6 rounded like the ladder: K=16 -> 2/5/9); only
                           # pulls when lambda_pop > 0. false = raw fractions (1.6 stationary was met by 1 committed +
                           # 1 parked at the cut)
-      lambda_pop: 5.0     # DEFAULT 5 (user 2026-10-29, kept 2026-10-30 after W4 / F-29): lands on 2/5/9 every seed
-                          # (M=10). ABLATION 0 = population free, l_pop logged only: the eye collapses into
-                          # duplicated cyclic channels and loses the stationary family in 4/5 seeds (F-29).
+      lambda_pop: 0.0     # DEFAULT 0 since 2026-11-02 (D-036): the 1/3/6 proportion is the testbed TRUTH and cannot be
+                          # known on a real field (user). l_pop is still logged. ABLATION 5 = the 2026-10-29/30 oracle
+                          # pull (lands on 2/5/9 every seed; with the SPECTRAL measure, 0 collapsed to cyclic, F-29).
                           # 0.5 (the init gradient match, |g_white|=1.9e-3 |g_pop|=3.6e-3) left cyclic over-filled
                           # (~8.5 vs 5)
       # --- COMMITMENT (2026-10-29, after the first soft runs): L_pop only matches the MEAN of q, and the eye met
@@ -127,12 +127,13 @@ train:
                           # reconstruction unchanged. Only read when role_mode=soft.
       lambda_ent: 0.0     # decisiveness: + lambda_ent * mean_i H(q_i). 0 = off. ABLATION: at 0.5 it froze each
                           # channel's untrained family by step ~300 (stationary 0.2/seed at M=10)
-    # --- D-035 (W2, 2026-10-30): WHICH QUANTITY decides cyclic / chaotic in soft mode -------------------
-    # spectral = structure share + line/band hinges, 3 families (DEFAULT until the 2b runs are judged).
-    # predictability = 4 families: flat gate (unchanged) -> cyclic if p_long >= p_cut -> chaotic if g >= g_cut
-    #   -> noise. p_long = linear ridge on the channel's own long past, lead h_long; g = nonlinear-over-linear gain
-    #   on a short past, leads 1..h_gain. Calibrated on truth + test signals in F-30 (90/90 correct).
-    family_measure: spectral
+    # --- D-035 (W2, 2026-10-30) / D-036 (default 2026-11-02): WHICH QUANTITY decides cyclic / chaotic in soft mode
+    # predictability = DEFAULT, 4 families: flat gate (unchanged) -> cyclic if p_long >= p_cut -> chaotic if
+    #   g >= g_cut -> noise. p_long = linear ridge on the channel's own long past, lead h_long; g = nonlinear-over-
+    #   linear gain on a short past, leads 1..h_gain. Calibrated on truth + test signals in F-30 (90/90 correct).
+    # spectral = ABLATION: structure share + line/band hinges, 3 families (calls quasi-periodic signals and
+    #   same-spectrum noise chaotic, F-30).
+    family_measure: predictability
     pred:
       m_short: 8          # short window 8 lags x 2 steps (span 14): where the nonlinear gain sees chaos
       s_short: 2
@@ -143,15 +144,23 @@ train:
       n_rff: 512          # random Fourier features of the nonlinear ridge (fixed per run, seed = run seed)
       lam_lin: 1.0e-6     # ridge strength x n_fit, as calibrated in F-30
       lam_nl: 1.0e-4
-      p_cut: 0.5          # cyclic vs not (F-30: cyclic/QP 0.99-1.00, chaos/noise <= 0.22)
+      p_cut: 0.8          # cyclic vs not. DEFAULT 0.8 (D-036, 2026-11-02; F-30: truth cyclic/QP 0.99-1.00, chaos/noise
+                          # <= 0.22). WHY not 0.5: untrained half-domain blends (p 0.6-0.9) and cycle+chaos mixtures
+                          # passed as cyclic and the eye collapsed to cyclic (F-31)
       g_cut: 0.1          # chaotic vs noise (F-30: Lorenz 0.18-0.41, noise <= 0)
       beta_p: 10.0        # logit scales of the soft vote (same role as soft.beta)
       beta_g: 25.0
-      p_target: 0.9       # cyclic: be predictable at the horizon
+      p_target: 0.97      # cyclic: be predictable at the horizon. DEFAULT 0.97 (D-036): a cyclic channel must shed its
+                          # mixed-in chaos to ~3 %; at 0.9 a mixture (~10 % chaos) already satisfied the hinge (F-31)
       g_target: 0.2       # chaotic: carry at least the weakest truth Lorenz mode's determinism
       p_cap: 0.3          # chaotic: not long-predictable (truth Lorenz <= 0.22)
+      noise_penalty: structure  # DEFAULT (D-036, 2026-11-02): noise pays min(cyclic, chaotic) penalty -- pushed toward
+                          # its nearest real family, never cheaper than it. none = noise is free (the D-035 ruling):
+                          # with the tight cut, 5/16 channels rested there as unclassified mixtures (F-31)
       # GRADIENT-matched to lambda_white at init (D-019), measured M=10, K=16, seed 0 (2026-10-30):
       # |g_white|=1.9e-3, |g_pcyc|=6.9e-4, |g_g|=1.0e-4, |g_pcap|=1.6e-3 at weight 1 -> 2.8 / 18.6 / 1.2
+      # (matched at p_target 0.9 / p_cut 0.5; under the 0.97 / 0.8 defaults the cyclic hinge's init gradient is
+      # 0.73x |g_white| -- kept, the D-036 runs used 2.8)
       lambda_pcyc: 2.8
       lambda_g: 18.6
       lambda_pcap: 1.2
