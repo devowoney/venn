@@ -81,6 +81,11 @@ def main(cfg: DictConfig) -> None:
         # reference energy density: the mean per-cell temporal variance of the field. A channel
         # whose var/count^2 falls below this is reading quieter-than-average cells (D-019).
         e_ref = field_fit.var(dim=0).mean().clamp_min(1e-12)
+        # D-037: under `signal_moment: second` the LEVEL counts as signal, so the reference is the mean per-cell
+        # second moment E[x^2] = var + mean^2 (same units as the channel's (mean^2 + var)/count^2 below)
+        moment2 = str(cfg.train.get("signal_moment", "variance")) == "second"
+        if moment2:
+            e_ref = (field_fit ** 2).mean(dim=0).mean().clamp_min(1e-12)
         cell_mean = field_fit.reshape(t_fit, -1).mean(dim=0, keepdim=True)  # [1,N] for L_recon
         x_ref = ((field_fit.reshape(t_fit, -1) - cell_mean) ** 2).mean()    # field energy scale
         # geometric footprint ladder: channel 0 gets the largest target, channel K-1 the smallest
@@ -210,6 +215,8 @@ def main(cfg: DictConfig) -> None:
         # no signal to be slow or correlated). Require each channel's count-normalized signal to
         # keep unit std -- a VICReg-style one-sided hinge, inactive for any live channel.
         sd_n = (sc / enc.soft_count().clamp_min(1e-6).sqrt()).std(dim=0)      # [K]
+        if moment2:   # D-037: a level-dominated channel is alive too -> RMS of the UNCENTERED signal
+            sd_n = (s_t / enc.soft_count().clamp_min(1e-6).sqrt()).pow(2).mean(dim=0).sqrt()
         # weighted so a FLAT rung is not required to fluctuate (D-025); w_dyn is all-ones otherwise
         l_var = ((torch.relu(1.0 - sd_n) ** 2) * w_dyn).sum() / w_dyn.sum().clamp_min(1e-6)
         loss = loss + cfg.train.lambda_var * l_var
@@ -220,10 +227,19 @@ def main(cfg: DictConfig) -> None:
         # scale-free L_slow walks every kernel into the dead corners of the domain (finding F-6).
         cnt = enc.soft_count().clamp_min(1e-6)                                # [K]
         e_ch = torch.diagonal(cov) / cnt ** 2                                 # [K] energy density
+        if moment2:   # D-037: the coherent LEVEL of the selected cells counts as energy (static structure too)
+            e_ch = (mu[0] ** 2 + torch.diagonal(cov)) / cnt ** 2
         l_energy = (((torch.relu(1.0 - e_ch / e_ref) ** 2) * w_dyn).sum()
                     / w_dyn.sum().clamp_min(1e-6))       # flat rungs exempt (D-025)
         if cfg.train.lambda_energy:
             loss = loss + cfg.train.lambda_energy * l_energy
+        if step == 0 and moment2:   # D-037: how strong the second-moment terms are at init, against L_white (D-019)
+            g_w = torch.autograd.grad(l_white, enc.logits, retain_graph=True)[0].norm()
+            for nm, term, lam in [("energy", l_energy, cfg.train.lambda_energy), ("var", l_var, cfg.train.lambda_var)]:
+                g_t = torch.autograd.grad(term, enc.logits, retain_graph=True, allow_unused=True)[0]
+                g_t = float(g_t.norm()) if g_t is not None else 0.0
+                print(f"[train] second-moment {nm}: |g_white|={g_w:.2e} |g_{nm}|={g_t:.2e} (x lambda {lam}) "
+                      f"e/e_ref [{float((e_ch / e_ref).min()):.2f},{float((e_ch / e_ref).max()):.2f}]")
 
         # --- scale ladder (D-020): keep a DIVERSITY OF MASK TYPES ------------------------------
         # Left free, every mask shrinks to a tiny patch (init ~4095 cells -> median ~28), because

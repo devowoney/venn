@@ -1039,6 +1039,34 @@ Supersedes the population-pull part of D-034 (`lambda_pop = 5`) and the default-
 - The cyclic weight `lambda_pcyc = 2.8` was gradient-matched at the old target. Under 0.97 / 0.8 its init gradient is
   0.73× `|g_white|`; it was kept, since the F-31 runs used it.
 
+## D-037 — Count the LEVEL as signal: second-moment energy floor and anti-death hinge (experiment, flag)
+
+**Date:** 2026-11-02. **Source:** user, "The loss function pushes kernels toward the dynamical signal zone. Therefore,
+we don't have a stationary signal. The idea was that kernels capture significant signal, especially stationary and
+chaotic, and decompose it in the next layer." Variant chosen: "count the level as signal".
+
+- **Problem (read against the code).** "Significant" is measured only as temporal VARIANCE.
+  - `l_energy` (var/count² ≥ the mean per-cell variance) pushes masks off static cells.
+  - `l_var` (std of the centered signal) demands fluctuation.
+  - `L_slow` rates a flat channel's fast leak as not slow.
+  - `l_recon` reconstructs the field minus its time mean, so it is blind to the static pattern.
+  - The pro-stationary flatness hinge and the `w_dyn` exemptions are weighted by q_stat, which is ≈ 0 at init and
+    so never switches on.
+  - Result: without the oracle pull, no stationary channel ever forms (F-29, F-31).
+- **Rule.** `train.signal_moment: variance | second`. Under `second`:
+  - energy floor: `e_i = (mean_b(s)² + var_b(s))/count²` against `e_ref = mean over cells of E_t[x²]`
+  - anti-death hinge: the RMS of the uncentered `s/sqrt(count)` ≥ 1
+  - The static structure (the mean state, same amplitude as the other modes here) becomes significant. Layer-1
+    channels may then mix level + dynamics, for the next layer (W1 mean/anomaly differences) to decompose.
+    Truth-free: no proportion, no family push.
+- **Unchanged.** `L_slow`, `L_white`, `l_recon`, the family terms and exemptions, the D-036 defaults, the lambdas.
+  Default `variance` until the runs are judged.
+- **Known remaining biases** (the next suspects if no level-carrying channels emerge): `L_slow` on a flat channel's
+  leak; `l_recon` blind to the time mean.
+- **Test.** M=10, 5 seeds, D-036 defaults + `signal_moment=second` (`obs_t8000_pred_level_seed*`) vs pred_noisepen
+  and pop5. Readouts: population, level share mean²/(mean²+var), mask overlap with the static pattern
+  (`capture.py`).
+
 ## Numbering collisions with the encoder track
 
 The module-2 (`latent-predictor`) branch and the parallel `stationary-observer` (encoder) session both
@@ -1897,6 +1925,8 @@ l_var = mean_i relu(1 − std(s_i) / sqrt(count_i))²
 - **Exempt:** stationary rungs (they are meant not to fluctuate).
 - **Limits:** keeps a channel alive, not useful — it can sit in a quiet corner (F-6). Leans slightly
   against channels built from cancelling parts.
+- **`train.signal_moment: second` (D-037, experiment):** uses the RMS of the UNCENTERED `s/sqrt(count)`, so a
+  level-dominated channel counts as alive.
 
 #### `l_energy` — "look where the field moves"  (λ = 0.2)
 
@@ -1912,6 +1942,9 @@ l_energy = mean_i relu(1 − e_i / e_ref)²       e_ref = 0.371, the field's mea
 - **Exempt:** stationary rungs.
 - **Side effect:** the cheapest way to score high is a tiny coherent patch, so it pulls masks small;
   `l_size` holds it back.
+- **`train.signal_moment: second` (D-037, experiment):** `e_i = (mean² + var)/count²` against `e_ref` = the mean
+  per-cell E[x²]. The coherent LEVEL of the selected cells counts as energy, so static structure is "significant"
+  too.
 
 #### `l_size` — "keep your assigned footprint"  (λ = 0.3)
 

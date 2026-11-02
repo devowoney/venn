@@ -77,6 +77,10 @@ train:
   lambda_white: 1.0     # weight on mean off-diagonal corr^2 (the reference scale for the others)
   grad_clip: 10.0       # global grad-norm clip; tames spikes from near-degenerate directions
   lambda_var: 1.0       # anti-death hinge: relu(1 - std(s_i/sqrt(count_i)))^2, mean over channels
+  signal_moment: variance  # D-037 (EXPERIMENT 2026-11-02): what counts as SIGNIFICANT for l_energy / l_var.
+                        # variance = temporal variance only (DEFAULT): static structure counts as zero, so masks
+                        # are pushed off it and no stationary channel forms without the oracle pull (F-29, F-31).
+                        # second = level^2 + variance: the coherent level of the selected cells counts too
   lambda_energy: 0.2    # D-019 energy floor: relu(1 - e_i/e_ref)^2, e_i = var(s_i)/count_i^2.
                         # Without it L_slow drives every kernel to the dead domain edges (F-6).
   lambda_recon: 0.3     # D-019 coverage: 1 - R^2 of the best per-batch linear decode of the field

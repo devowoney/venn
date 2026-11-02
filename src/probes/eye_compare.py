@@ -85,6 +85,11 @@ PRESETS = {   # preset -> testbed -> variant -> run pattern (+ seeds); variants 
         "M=10": {"pop5": ".tmps/runs/obs_t8000_soft_popint_seed{s}", "pred_tight": ".tmps/runs/obs_t8000_pred_tight_seed{s}",
                  "pred_noisepen": ".tmps/runs/obs_t8000_pred_noisepen_seed{s}", "seeds": range(5)},
     },
+    # D-037 (2026-11-02): count the LEVEL as signal (train.signal_moment=second) on top of the D-036 defaults
+    "w2_level": {
+        "M=10": {"pop5": ".tmps/runs/obs_t8000_soft_popint_seed{s}", "pred_noisepen": ".tmps/runs/obs_t8000_pred_noisepen_seed{s}",
+                 "pred_level": ".tmps/runs/obs_t8000_pred_level_seed{s}", "seeds": range(5)},
+    },
 }
 VCOL = ["#8c8b86", "#2a78d6", "#eb6834", "#1baf7a"]
 METRICS = [("recon_over_ceiling", "reconstruction R² / ceiling"), ("cyc_best", "cyclic: best single |corr|"),

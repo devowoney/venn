@@ -26,7 +26,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 from omegaconf import OmegaConf  # noqa: E402
 
-from src.data.synthetic import _ar1_response  # noqa: E402
+from src.data.synthetic import _ar1_response, _gaussian_blur  # noqa: E402
 from src.probes.eye_compare import FAM_COL  # noqa: E402
 from src.probes.family import label_predictability  # noqa: E402
 
@@ -65,7 +65,28 @@ def capture(run: str) -> dict:
     cfg_pc = cfg.train.spectral.get("pred") or OmegaConf.load("config/config.yaml").train.spectral.pred
     labels, pd = label_predictability(S, pc=cfg_pc)
     corr = np.array([[abs(np.corrcoef(S[va, k], A[j, va])[0, 1]) for j in keep] for k in range(S.shape[1])])
-    return dict(
+    # D-037 readouts: does a channel carry the STATIC structure? level share = mean^2/(mean^2+var) of the raw channel;
+    # static overlap = corr(mask, stationary pattern) over cells, SSH layer vs phi_0 and SST layer vs its blurred copy
+    # (the generator blurs shared patterns for SST). Sign: which lobe of the pattern the mask sits on.
+    Sva = S[va]
+    level_share = Sva.mean(0) ** 2 / (Sva.mean(0) ** 2 + Sva.var(0) + 1e-30)
+    i_stat = [j for j in range(len(fam)) if fam[j] == "stationary"]
+    static_ov = np.full(S.shape[1], np.nan)
+    if i_stat:
+        phi0 = art["truth_phi"][i_stat[0]].astype(np.float64)
+        ref = np.concatenate([phi0.ravel(), _gaussian_blur(phi0, float(cfg.data.sst_blur_sigma)).ravel()])
+        M = art["masks"].astype(np.float64).reshape(S.shape[1], -1)
+        static_ov = np.array([np.corrcoef(M[k], ref)[0, 1] for k in range(S.shape[1])])
+    # the EYE's own final soft vote (what training decided), shown next to the labeller so the two can be compared;
+    # older/fixed-ladder runs have no q
+    ROLE2FAM = {"slow": "stationary", "cyclic": "cyclic", "fast": "chaotic", "noise": "noise"}
+    if "q" in art.files:
+        q = art["q"]
+        q_fam = [ROLE2FAM[str(r)] for r in art["roles"]]
+        q_max, q_stat = q.max(1), q[:, 0]
+    else:
+        q_fam, q_max, q_stat = ["-"] * S.shape[1], np.full(S.shape[1], np.nan), np.full(S.shape[1], np.nan)
+    return dict(level_share=level_share, static_ov=static_ov, q_fam=q_fam, q_max=q_max, q_stat=q_stat,
         S=S, va=va, keep=keep, fam=fam, labels=labels, p_long=pd["p_long"], g=pd["g"], corr=corr,
         share_cyc=grp["cyclic"].var(0) / var, share_cha=grp["chaotic"].var(0) / var,
         unexpl=(S[va] - fit).var(0) / var, corr_sst=corr_sst,
@@ -76,8 +97,8 @@ def capture(run: str) -> dict:
 def figure(c: dict, title: str, path: str):
     K = len(c["labels"])
     order = sorted(range(K), key=lambda k: (FAM_ORDER.index(c["labels"][k]), -c["p_long"][k]))
-    fig = plt.figure(figsize=(17, 10))
-    gs = fig.add_gridspec(2, 2, height_ratios=[1.15, 1], width_ratios=[1, 1.25], hspace=0.38, wspace=0.18)
+    fig = plt.figure(figsize=(17, 13))
+    gs = fig.add_gridspec(3, 2, height_ratios=[1.15, 0.55, 1], width_ratios=[1, 1.25], hspace=0.45, wspace=0.18)
 
     # 1. heatmap |corr| channel x mode -------------------------------------------------------------
     ax = fig.add_subplot(gs[0, 0])
@@ -86,8 +107,9 @@ def figure(c: dict, title: str, path: str):
     xt = [f"cyc P{c['periods'][i % len(c['periods'])]:.0f}" for i in range(len(cyc))] + \
          [f"chao {i}" for i in range(len(c["keep"]) - len(cyc))]
     ax.set_xticks(range(len(xt)), xt, rotation=45, ha="right", fontsize=8)
-    ax.set_yticks(range(K), [f"ch{k} {c['labels'][k][:4]}  p{c['p_long'][k]:.2f} g{c['g'][k]:+.2f}" for k in order],
-                  fontsize=7)
+    # row label = labeller verdict, the eye's own soft vote (q of its argmax family), and the two predictability scores
+    ax.set_yticks(range(K), [f"ch{k} {c['labels'][k][:4]} (q {c['q_fam'][k][:4]} {c['q_max'][k]:.2f})  "
+                             f"p{c['p_long'][k]:.2f} g{c['g'][k]:+.2f}" for k in order], fontsize=7)
     for t, k in zip(ax.get_yticklabels(), order):
         t.set_color(FAM_COL[c["labels"][k]] if c["labels"][k] != "noise" else "#52514e")
     ax.axvline(len(cyc) - 0.5, color="#0b0b0b", lw=1)
@@ -101,23 +123,30 @@ def figure(c: dict, title: str, path: str):
                  fontsize=9, loc="left")
     fig.colorbar(im, ax=ax, fraction=0.03, pad=0.01)
 
-    # 2. stacked variance shares -------------------------------------------------------------------
+    # 2. stacked shares of the WHOLE signal: level + fluctuation -------------------------------------
+    # WHY total power (level^2 + var), not variance: a stationary eye IS a constant level with a small wiggle. A
+    # variance-only split hides the level and drew such eyes as "100 % chaotic" (user, 2026-11-02).
     ax = fig.add_subplot(gs[0, 1])
     x = np.arange(K)
-    sc, sh, un = (c[k][order] for k in ("share_cyc", "share_cha", "unexpl"))
-    ax.bar(x, sc, 0.72, color=FAM_COL["cyclic"], edgecolor="white", lw=1.5, label="cyclic modes")
-    ax.bar(x, sh, 0.72, bottom=sc, color=FAM_COL["chaotic"], edgecolor="white", lw=1.5, label="chaotic modes")
-    ax.bar(x, un, 0.72, bottom=sc + sh, color=UNEXPL, edgecolor="white", lw=1.5, label="unexplained (1 - R²)")
+    lv = c["level_share"][order]
+    fl = 1.0 - lv                                              # fluctuation share of total power
+    sc, sh, un = (c[k][order] * fl for k in ("share_cyc", "share_cha", "unexpl"))
+    ax.bar(x, lv, 0.72, color=FAM_COL["stationary"], edgecolor="white", lw=1.5, label="level (mean²)")
+    ax.bar(x, sc, 0.72, bottom=lv, color=FAM_COL["cyclic"], edgecolor="white", lw=1.5, label="cyclic modes")
+    ax.bar(x, sh, 0.72, bottom=lv + sc, color=FAM_COL["chaotic"], edgecolor="white", lw=1.5, label="chaotic modes")
+    ax.bar(x, un, 0.72, bottom=lv + sc + sh, color=UNEXPL, edgecolor="white", lw=1.5, label="unexplained")
     nmode = (c["mode_share"][order] >= 0.10).sum(1)
     for i, k in enumerate(order):
-        ax.text(i, min(sc[i] + sh[i] + un[i], 1.12) + 0.02, f"{nmode[i]}", ha="center", fontsize=7, color="#52514e")
+        ax.text(i, min(lv[i] + sc[i] + sh[i] + un[i], 1.12) + 0.02, f"{nmode[i]}", ha="center", fontsize=7,
+                color="#52514e")
     ax.set_xticks(x, [f"ch{k}\n{c['labels'][k][:4]}" for k in order], fontsize=7)
     for t, k in zip(ax.get_xticklabels(), order):
         t.set_color(FAM_COL[c["labels"][k]] if c["labels"][k] != "noise" else "#52514e")
     ax.set_ylim(0, 1.25)
-    ax.set_ylabel("share of channel variance (validation)")
-    ax.set_title("what each channel is made of (number on top = truth modes carrying ≥ 10 %)", fontsize=9, loc="left")
-    ax.legend(fontsize=8, frameon=False, ncol=3, loc="upper left")
+    ax.set_ylabel("share of channel power, level² + variance (validation)")
+    ax.set_title("what each channel's signal is made of: level + fluctuation (number on top = truth modes "
+                 "carrying ≥ 10 % of the fluctuation)", fontsize=9, loc="left")
+    ax.legend(fontsize=8, frameon=False, ncol=4, loc="upper left")
     ax.grid(alpha=0.2, axis="y")
 
     # 3. example traces ----------------------------------------------------------------------------
@@ -125,7 +154,18 @@ def figure(c: dict, title: str, path: str):
     for lab, n in (("cyclic", 1), ("chaotic", 1), ("noise", 2)):
         picks += [k for k in order if c["labels"][k] == lab][:n]
     picks = picks[:4] if len(picks) >= 4 else (picks + [k for k in order if k not in picks])[:4]
-    sub = gs[1, :].subgridspec(1, 4, wspace=0.15)
+    # 2b. does each channel carry the STATIC structure? (D-037) ------------------------------------
+    ax = fig.add_subplot(gs[1, :])
+    x = np.arange(K)
+    ax.bar(x, np.abs(c["static_ov"][order]), 0.6, color="#8c8b86", edgecolor="white", lw=1.2)
+    ax.set_xticks(x, [f"ch{k} {c['labels'][k][:4]}" for k in order], fontsize=7)
+    ax.set_ylim(0, 1.05)
+    ax.set_ylabel("|corr|", fontsize=8)
+    ax.set_title("where each eye looks: |corr(mask, static pattern)| over cells (same channel order as above)",
+                 fontsize=9, loc="left")
+    ax.grid(alpha=0.2, axis="y")
+
+    sub = gs[2, :].subgridspec(1, 4, wspace=0.15)
     w = slice(0, 400)
     for i, k in enumerate(picks):
         ax = fig.add_subplot(sub[0, i])
@@ -160,12 +200,13 @@ def main():
         name = os.path.basename(run.rstrip("/"))
         print(f"\n=== {name} (labeller p_cut {c['cut']}) ===")
         print(f"{'ch':>3} {'label':>10} {'p_long':>6} {'g':>6} | {'cyc':>5} {'chao':>5} {'unexpl':>6} | "
-              f"modes>=10%  best|corr| raw(SSH) / low-passed(SST)")
+              f"modes>=10%  best|corr| SSH / SST | level  static_ov  q_stat")
         for k in range(len(c["labels"])):
             ms = c["mode_share"][k]
             print(f"{k:>3} {c['labels'][k]:>10} {c['p_long'][k]:6.2f} {c['g'][k]:+6.2f} | {c['share_cyc'][k]:5.2f} "
                   f"{c['share_cha'][k]:5.2f} {c['unexpl'][k]:6.2f} | {int((ms >= 0.10).sum()):>10}  "
-                  f"{c['corr'][k].max():.2f} / {c['corr_sst'][k].max():.2f}")
+                  f"{c['corr'][k].max():.2f} / {c['corr_sst'][k].max():.2f} | {c['level_share'][k]:5.2f}  "
+                  f"{c['static_ov'][k]:+.2f}  {c['q_stat'][k]:6.2f}")
         figure(c, f"Signal capture, {name}: what each channel is made of (truth regression, validation)",
                os.path.join(a.out, f"capture_{name}.png"))
 
