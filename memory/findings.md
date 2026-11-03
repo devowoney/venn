@@ -1393,3 +1393,37 @@ Population (mean of 5 seeds; stat/cyc/chao/noise, cut-0.8 labeller) and best sin
 **Decision (user, 2026-11-02):** the pred_noisepen settings become the default (D-036). Open: init dependence (next
 candidate: warm-up before the first vote), no stationary family, SST-smoothed chaos, and the data-estimated
 population target.
+
+### F-32. Layer 1 = family-free sensor: complete coverage, mixed eyes (D-038; accepted by the user 2026-11-02)
+
+**Setup.** M=10, K=16, T=10000, train `[0,8000)`, 8000 steps, 5 seeds. `train.spectral.enable=false` (no family or
+spectral term) and `train.signal_moment=second` (the level counts as signal, D-037) → `obs_t8000_l1_seed*`.
+Readouts: `src/probes/coverage.py` (new), `capture.py`, `kernels.py` → `.tmps/l1/`.
+
+1. **Coverage is complete.**
+   - Whole field read back at 99 % in every seed (SSH 0.990–0.992, SST 0.990–0.993).
+   - The field inside every truth patch reconstructs at 0.98–1.00.
+   - Every truth mode decodes at 0.99–1.00, except modes visible only in SST, which sit at their instant-decode
+     ceiling cos²(atan(2π·τ/P)): P140 0.57–0.58 vs 0.55; P60 0.20–0.23 vs 0.19; P300 0.85–0.86 vs 0.85; SST-only
+     chaos ≈ 0.1.
+   - Pale cells on the coverage maps are only the empty background between patches.
+2. **Coverage does not need a dedicated eye.** Modes with no eye covering > 50 % of their patch (e.g. chao 1, mask
+   coverage ≤ 0.12) are still read back at 0.99–1.00: a few of their cells sit inside mixed eyes, and the linear
+   readout over all eyes isolates them. This relies on the near-noise-free testbed (untested under real noise).
+3. **The eyes are near-binary footprints of two kinds**:
+   - band eyes on a lobe of the static pattern, often plus a blob (big level, small wiggle)
+   - blob eyes on cycle or chaotic patches
+
+   Without family terms mixtures are frequent (cycle + chaos; level + dynamics; seed 2: 13/16 eyes have level
+   share > 0.9). Labeller readout (labels only): seed 0 3/6/6/1, seed 2 1/3/4/8 (the "noise" eyes are cycle + chaos
+   mixtures), seed 4 4/7/4/1.
+4. **Disjoint footprints are not independent.** In seed 0, 42 of 120 eye pairs share no cell. Their median |corr| is
+   0.08, but about 10 % exceed 0.3 (max 0.54). Sources:
+   - the same mode seen in SSH and in its SST copy
+   - distant lobes of one pattern
+   - coupled Lorenz coordinates (truth chao 0–1 and chao 3–4 correlate at +0.88)
+   - shared mixtures
+
+   Whitening ends at a mean off-diagonal corr² of 0.06. The user: this cross-eye correlation is information (W6).
+
+**Decision (user, 2026-11-02): "Yes, accept layer 1 and plan layer 2."**

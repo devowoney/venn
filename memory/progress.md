@@ -1947,3 +1947,23 @@ run scope stays M=10 × 5 seeds.
   - a stationary family that can emerge
   - g calibration on SST-smoothed chaos
   - the data-estimated population target
+
+#### Same session (2026-11-02, continued) — level as signal (D-037), the layer definition (D-038), layer 1 accepted (F-32)
+
+- User: "the loss pushes kernels toward the dynamical zone, therefore no stationary signal." I confirmed it from the
+  code (energy/var/slow push away from flat, recon is blind to the time mean, q_stat gate ≈ 0). Variant chosen:
+  **count the level as signal** → D-037, flag `train.signal_moment: second`.
+  - On the D-036 defaults: stationary eyes formed in every seed (mean 2.4), each a static level + one dynamic mode.
+  - User: "hard to understand; give only the current configuration's result" → memory note.
+  - The capture figure was then fixed to show the level (the user had read "no stationary probability" off a
+    variance-only panel).
+  - Kernel figures added (`src/probes/kernels.py`): band + blob vs blob eyes; duplicates and gaps.
+- Coverage question: are chao 1 and chao 4 lost? No. Every patch is read back at 0.97–1.00; faint inclusion in
+  mixed eyes is enough.
+- **User defined the layers:** "loosen the criterion on the first layer to capture many signals; tighten in the
+  deeper layer to make a sharp sight." Rulings: layer 1 family-free; layer 2 = child masks + signed sibling
+  differences; layer 1 first, then frozen; 2 children per parent → D-038.
+- Layer 1 trained (`obs_t8000_l1_seed*`), with a new `coverage.py` probe: complete coverage, mixed eyes (F-32).
+- User asked whether disjoint eyes are uncorrelated: mostly yes, but ~10 % of disjoint pairs correlate (shared
+  modes, SSH/SST copies, coupled Lorenz coordinates).
+- **User: "accept layer 1 and plan layer 2."**

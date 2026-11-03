@@ -84,8 +84,8 @@ def capture(run: str) -> dict:
         q = art["q"]
         q_fam = [ROLE2FAM[str(r)] for r in art["roles"]]
         q_max, q_stat = q.max(1), q[:, 0]
-    else:
-        q_fam, q_max, q_stat = ["-"] * S.shape[1], np.full(S.shape[1], np.nan), np.full(S.shape[1], np.nan)
+    else:   # family-free eye (layer 1, D-038): no vote to show, so the predictability labeller names the family
+        q_fam, q_max, q_stat = list(labels), np.full(S.shape[1], np.nan), np.full(S.shape[1], np.nan)
     return dict(level_share=level_share, static_ov=static_ov, q_fam=q_fam, q_max=q_max, q_stat=q_stat,
         S=S, va=va, keep=keep, fam=fam, labels=labels, p_long=pd["p_long"], g=pd["g"], corr=corr,
         share_cyc=grp["cyclic"].var(0) / var, share_cha=grp["chaotic"].var(0) / var,
@@ -108,8 +108,9 @@ def figure(c: dict, title: str, path: str):
          [f"chao {i}" for i in range(len(c["keep"]) - len(cyc))]
     ax.set_xticks(range(len(xt)), xt, rotation=45, ha="right", fontsize=8)
     # row label = labeller verdict, the eye's own soft vote (q of its argmax family), and the two predictability scores
-    ax.set_yticks(range(K), [f"ch{k} {c['labels'][k][:4]} (q {c['q_fam'][k][:4]} {c['q_max'][k]:.2f})  "
-                             f"p{c['p_long'][k]:.2f} g{c['g'][k]:+.2f}" for k in order], fontsize=7)
+    vote = [f" (q {c['q_fam'][k][:4]} {c['q_max'][k]:.2f})" if np.isfinite(c["q_max"][k]) else "" for k in range(K)]
+    ax.set_yticks(range(K), [f"ch{k} {c['labels'][k][:4]}{vote[k]}  p{c['p_long'][k]:.2f} g{c['g'][k]:+.2f}"
+                             for k in order], fontsize=7)
     for t, k in zip(ax.get_yticklabels(), order):
         t.set_color(FAM_COL[c["labels"][k]] if c["labels"][k] != "noise" else "#52514e")
     ax.axvline(len(cyc) - 0.5, color="#0b0b0b", lw=1)

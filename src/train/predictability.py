@@ -89,7 +89,7 @@ def pred_family_q(q_stat: torch.Tensor, p_long: torch.Tensor, g: torch.Tensor, p
 
 
 def pred_family_terms(S_all: torch.Tensor, q_stat: torch.Tensor, pen_flat: torch.Tensor, sp, pop: torch.Tensor,
-                      rff: dict, tau: float):
+                      rff: dict, tau: float, weights: torch.Tensor | None = None):
     """Same contract as `spectral.soft_family_terms`, in the predictability quantities (D-035).
 
       stationary : pen_flat (the unchanged flatness hinge, weighted as in the spectral measure)
@@ -114,7 +114,10 @@ def pred_family_terms(S_all: torch.Tensor, q_stat: torch.Tensor, pen_flat: torch
     else:
         pen_noise = torch.zeros_like(p_long)                   # D-035 default: noise is free (W1 decomposes it)
     pen = torch.stack([pen_flat, pen_cyc, pen_chao, pen_noise], dim=1)   # [K,4]
-    l_family = (q * pen).sum(dim=1).mean()
+    if weights is None:
+        l_family = (q * pen).sum(dim=1).mean()
+    else:   # layer 2 (D-039): an emptied child (weight ~0) is not scored on its ~0 signal
+        l_family = (weights * (q * pen).sum(dim=1)).sum() / weights.sum().clamp_min(1e-6)
     qbar = q.mean(dim=0).clamp_min(1e-8)
     l_pop = (pop * (pop.clamp_min(1e-8).log() - qbar.log())).sum()   # noise share 0 in pop: contributes nothing
     l_ent = -(q * q.clamp_min(1e-8).log()).sum(dim=1).mean()

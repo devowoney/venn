@@ -1067,6 +1067,72 @@ chaotic, and decompose it in the next layer." Variant chosen: "count the level a
   and pop5. Readouts: population, level share mean²/(mean²+var), mask overlap with the static pattern
   (`capture.py`).
 
+## D-038 — Layers of the observer: layer 1 = SENSOR (coverage), layer 2 = DECOMPOSER (purity)
+
+**Date:** 2026-11-02. **Source:** user, "the deeper layer means precise decomposed signal: 1. loosen the criterion on
+the first layer to capture many signals; 2. tighten in the deeper layer to make a sharp sight". Rulings the same day:
+layer 1 family-free; layer 2 = child masks + signed sibling differences; layer 1 trained first, then frozen;
+2 children per layer-1 eye.
+
+| | layer 1 (sensor) | layer 2 (decomposer) |
+|---|---|---|
+| job | see everything significant (level included) without copying each other | split each layer-1 mixture into single clean signals |
+| objectives | `L_slow`, `L_white`, `l_recon`, second-moment `l_energy` / `l_var` (D-037), `l_size` | the tight family criteria (D-036: predictability, p_cut 0.8 / p_target 0.97, g, flatness, noise → structure) + one mode per child |
+| families | labels only (post-hoc `label_predictability`), no family penalty | enforced |
+| config | `train.spectral.enable=false`, `train.signal_moment=second` | **superseded by D-039** (2026-11-02): 4 children per non-cyclic eye as a soft PARTITION of its cells, each child with its own family vote, siblings pushed to differ; cyclic eyes pass through; no signed differences |
+| training | first | after layer 1, with layer 1 FROZEN |
+| leftover | mixtures are fine | what cannot be split = real noise / bias (user ruling, 2026-10-30) |
+
+- **WHY family-free, not "looser cuts".**
+  - Every configuration tested reached ~99 % field coverage collectively. The current eye reconstructs every
+    chaotic patch at 0.97–1.00, including modes with no dedicated eye.
+  - Making layer-1 eyes pure only produced duplicates and gaps. Diversity in layer 1 comes from whitening +
+  reconstruction, not from family terms (pred0, with loose cuts, still put 16 eyes on cycles).
+- **Layer 2's signed differences** are a scoped relaxation of D-005: a difference of two selection sums, still no
+  free continuous kernel. They need their own D-entry before any layer-2 code.
+- **Status.** Layer 1 **accepted** by the user, 2026-11-02 (F-32; runs `obs_t8000_l1_seed*`). Layer 2 is being planned.
+
+## D-039 — Layer 2 = per-eye FAMILY SPLIT ("sharpen sight"): non-cyclic eyes split into 4 children that each take a family
+
+**Date:** 2026-11-02. **Source:** user, revising the never-built A / B / A−B design of D-038: "I don't think the
+cyclic signal should be decomposed. The children should have family too, so not explicitly divide children as A, B
+and A−B. Let's decompose the stationary and chaotic parent signals into 4 families if possible — it was the original
+idea of 'sharpen sight'." Rulings:
+- decompose every layer-1 eye except cyclic (stationary, chaotic AND noise-labelled mixtures)
+- 4 children per decomposed eye
+- siblings pushed to take different families
+- children rebuild their parent; no near-copies among siblings
+
+- **Parents.** The frozen eyes of an accepted layer-1 run (F-32). Their family comes from the predictability labeller
+  on the training slice, fixed before layer 2. Cyclic eyes pass through unchanged as one layer-2 channel each.
+- **Children = a soft PARTITION of the parent's cells.**
+  - `child_c = parent_mask ⊙ softmax_c(logits / T)`, c = 1..4, per cell.
+  - They always sum to the parent, so "rebuild the parent" holds by construction and nothing layer 1 saw is lost.
+  - Pure selection (D-005 intact; the signed difference of D-038 is dropped).
+  - T anneals so the partition ends near-hard.
+  - Init: independent blurred-noise logits per child.
+- **"If possible."** A child may empty out. Its detached mass weight `w_c = clamp(count_c / (fade_frac ·
+  count_parent), 0, 1)` (fade_frac 0.02) scales its family and diversity terms. A child below 2 % of the parent's
+  mass is "faded" and is not scored on a ~0 signal.
+- **Child family** = its own soft 4-family vote with the D-036 tight criteria, reusing `flat_vote` and
+  `pred_family_terms`:
+  - p_cut 0.8 / p_target 0.97; g target 0.2; p_long cap 0.3
+  - noise pushed to structure; no population target; τ 1 → 0.2
+  - The stationary family is held to the log-flatness target amp 0.02. So a band + blob parent (amp 0.03–0.04) is
+    pushed to give its wiggle to another child.
+- **Sibling family diversity:** `Σ_{i<j} w_i w_j ⟨q_i, q_j⟩` per parent (zero when siblings vote different
+  families). No fixed child → family assignment.
+- **No near-copies guard:** `relu(|corr(s_i, s_j)| − 0.9)²` over sibling pairs.
+- **Not used:** an alive hinge (emptying is allowed) and whitening across parents (cross-eye correlation is
+  information, F-32).
+- **WHY a partition.** It makes faithfulness automatic: there is no rebuild term to balance, and a useless child can
+  simply give its cells away. Splitting is driven only by purity: the family penalties of a mixed parent exceed
+  those of its clean parts.
+- **Code / runs:**
+  - `src/models/child_encoder.py`, `src/train/train_layer2.py`, `layer2:` block in `config/config.yaml`
+  - runs `obs_t8000_l2_seed*` (one per accepted layer-1 seed)
+  - readouts `kernels.py` (layer-2 mode), `capture.py`, `coverage.py`
+
 ## Numbering collisions with the encoder track
 
 The module-2 (`latent-predictor`) branch and the parallel `stationary-observer` (encoder) session both
@@ -1828,6 +1894,23 @@ differentiable.
   is maximized by a tiny coherent patch (D-020).
 
 ---
+
+## SOP 02b — Layer 2 ("sharpen sight", D-039)
+
+Input: an accepted layer-1 run (frozen masks, `.hydra/config.yaml`), via `layer2.parent_run`. The field is rebuilt
+exactly from that config and seed. Steps:
+1. Label each parent with `label_predictability` on the training slice. Cyclic eyes pass through; all the others are
+   split.
+2. Split each non-cyclic parent into `layer2.n_child` (4) children, a soft partition of its cells
+   (`softmax_c(logits/T)` × parent mask; `temp0 → temp1`).
+3. Loss per step, on the full training-slice series:
+   - `L_family` (the D-036 tight 4-family terms on every live child, mass-weighted)
+   - `+ lambda_div · Σ_{i<j} w_i w_j ⟨q_i, q_j⟩` (siblings differ)
+   - `+ lambda_copy · relu(|corr| − copy_thr)²` (no near-copies)
+4. Outputs (artifact `S`, layer-1 keys): the children of split parents, then the pass-through parents. `kind`,
+   `parent_idx`, `faded` (mass < `fade_frac` of the parent), `parent_label`, `parent_S`, `parent_masks`.
+
+The children sum to the parent by construction (check: `parent_S ≈ Σ children`).
 
 ## SOP 02a — Loss guide — what every term asks for, in plain words
 

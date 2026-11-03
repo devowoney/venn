@@ -252,6 +252,27 @@ train:
                         # observer-stability probe. 0 = off (default; artifacts unchanged).
 
 # run dir + all artifacts + TensorBoard land under ./.tmps/ (D-014)
+# --- LAYER 2 = "sharpen sight" (D-039, SOP 02b; 2026-11-02). Read only by src/train/train_layer2.py -----------------
+# Each NON-cyclic eye of a frozen layer-1 run is split into n_child children (a soft partition of its cells), each
+# child with its own 4-family vote (the train.spectral D-036 criteria); cyclic eyes pass through.
+layer2:
+  parent_run: null      # REQUIRED: an accepted layer-1 run dir (artifacts.npz + .hydra/config.yaml), e.g. obs_t8000_l1_seed0
+  n_child: 4            # children per split eye ("4 families if possible", user)
+  temp0: 1.0            # partition softmax temperature, annealed geometrically to temp1 so the split ends near-hard
+  temp1: 0.1
+  init_std: 1.5         # child logit std at init (as the layer-1 multiscale init)
+  init_sigma: 3.0       # smoothness of the child init logits, in cells
+  fade_frac: 0.02       # a child below 2 % of its parent's mass is "faded": not scored, reported as such
+  # GRADIENT-matched to the family term at init (D-019), layer-1 seed 0 parent: |g_family|=1.4e-2, |g_div|=9.8e-2,
+  # |g_copy|=2.3e-4 at weight 1 -> 0.14 / 60
+  lambda_div: 0.14      # siblings take different families: sum_{i<j} w_i w_j <q_i, q_j> per parent
+  lambda_copy: 60.0     # no near-copies among siblings: relu(|corr| - copy_thr)^2
+  copy_thr: 0.9
+  max_steps: 8000
+  lr: 0.05
+  snap_every: 250
+  log_every: 100
+
 hydra:
   run:
     dir: ${hydra:runtime.cwd}/.tmps/runs/${now:%Y%m%d_%H%M%S}
