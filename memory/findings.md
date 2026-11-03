@@ -1427,3 +1427,74 @@ Readouts: `src/probes/coverage.py` (new), `capture.py`, `kernels.py` → `.tmps/
    Whitening ends at a mean off-diagonal corr² of 0.06. The user: this cross-eye correlation is information (W6).
 
 **Decision (user, 2026-11-02): "Yes, accept layer 1 and plan layer 2."**
+
+### F-33. Chaos seen through SST is missed by g because of SCALE, not dynamics; a relative gain on a whitened embedding fixes it (W2 step 2c, calibration only, 2026-11-03)
+
+**Setup.** Probe `src/probes/sst_chaos.py` → `.tmps/sst_chaos/` (`g_variants.png`, `sst_chaos.json`). No training,
+no default changed. Same windows, leads and ridge as D-035; only the chaos score g varies. Signals (generator seeds
+0–2, T=10000): the 18 Lorenz modes in SSH view, SST view (AR1 τ 20) and SST + 0.05 noise; controls = same-spectrum
+surrogates, OU τ 5 and white noise, each raw AND through the same AR1 (132 signals). Plus every live layer-2 child
+(`obs_t8000_l2_seed0..4`, 178), typed by its best |corr| (≥ 0.95) with one mode's SSH or SST view.
+
+1. **Why g0 misses it.** Through the low-pass the linear ridge is almost perfect at short leads, so the ABSOLUTE gain
+   e_lin − e_nl is capped by a tiny e_lin; and the kernel width (median embedded distance) is set by the large smooth
+   part, so the fine directions where the forcing shows are unresolved. g0: SSH chaos 0.19–0.40, SST chaos 0.02–0.32
+   (12/18 under the 0.1 cut); 108/132 correct.
+2. **Variants** (chaos min / noise max over all test signals):
+
+   | variant | what changes | chaos min | noise max | correct |
+   |---|---|---|---|---|
+   | g0 (current) | — | 0.025 | 0.004 | 108/132 |
+   | g_rel | 1 − Σe_nl/Σe_lin (relative gain) | 0.073 | 0.009 | 132/132 |
+   | g_wh | PCA-whitened embedding before the random features | 0.089 | 0.001 | 132/132 |
+   | g_lag | lag adapted to the channel's τ_e (SST τ_e 31–38 → lag 12–15) | −0.061 | −0.002 | 108/132 (worse) |
+   | **g_rw** | relative gain on the whitened embedding | **0.241** | **0.004** | **132/132** |
+
+   - A longer lag is the wrong fix: it spreads the window past the short-range determinism (same as span 120 in F-30).
+   - No variant finds structure in low-passed Gaussian noise (all controls ≤ 0.01).
+   - g_rw: SSH chaos 0.37–0.50, SST chaos 0.40–0.68, SST + noise 0.24–0.43; gap 0.24 (g0's gap: 0.02).
+3. **Layer-2 children.** 19 children are a clean chaotic SST view (|corr| 0.96–1.00); training labelled 13 of them
+   noise (g0 0.03–0.10). Under g_rw all 19 score 0.23–0.55 (cut 0.12, midway in the gap). The 7 chaotic-SSH-view
+   children stay chaotic under every variant. Cyclic children: g_rw lifts 1/21 over the cut (harmless: p_long gates
+   cyclic first); g_rel lifts 14/21.
+4. **Side effect on mixtures.** Of the 29 noise-labelled MIXTURE children, 20 cross the g_rw cut (they carry a
+   chaotic component). Mixtures labelled slow / cyclic / fast are unchanged (1 / 1 / 30 of 41 / 31 / 30 above the cut,
+   as with g0).
+
+**Open, for the user:** adopt g_rw as the chaos score (cut ≈ 0.12, g_target to re-set on the new scale, e.g. ~0.25
+= the weakest truth mode in SST + noise), and whether mixtures with a chaotic part should be called chaotic rather
+than noise. In the loss the whitening matrix would be treated as a scale (no gradient through `eigh`, like the kernel
+width).
+
+### F-34. Layer 2 with g_rw: no chaos seen through SST is called noise; noise shrinks to cycle-led mixtures (D-040, 2026-11-03)
+
+**Setup.** `obs_t8000_l2rw_seed0..4` (`.tmps/runs/launch_l2rw.sh`) uses the same accepted layer-1 parents and the same
+layer-2 settings as `obs_t8000_l2_seed*` (D-039). Only the chaos score changes: g_rw, cut 0.12, target 0.25 (D-040).
+Readouts:
+- `src/probes/sst_chaos.py --children .tmps/runs/obs_t8000_l2rw_seed{s}` → `.tmps/l2rw/sst_chaos/`
+- `kernels.py` → `.tmps/l2rw/kernels/`
+- `coverage.py` → `.tmps/l2rw/coverage/`
+
+1. **Population, 5 seeds summed (stat/cyc/chao/noise).**
+   - Before: 42/51/43/42, 178 live children. After: 41/55/77/23, 196 live children.
+   - Fewer children empty out.
+   - No NaN; all runs complete.
+2. **The targeted case is fixed.** No clean chaotic-SST-view child (|corr| ≥ 0.95) is labelled noise (13 before).
+   - All 10 such children and all 9 chaotic-SSH-view children are chaotic.
+   - All 34 cyclic-view children are cyclic.
+   - Children's g_rw is bimodal, ≈ 0 vs 0.23–0.42, with nothing near the cut.
+3. **What changed in the mixtures** (best single |corr| < 0.95):
+   - Labelled chaotic: 58 (was 30). 57/58 follow a chaotic mode best, median best |corr| 0.80 (was 0.91).
+     They are chaos-led, but less pure than before.
+   - Labelled noise: 23 (was 29). 22/23 follow a CYCLE best (median 0.79): cycle + chaos mixtures not predictable
+     enough to be cyclic.
+   - Clean single chaotic views: 26 → 19. Clean cyclic views: 21 → 34.
+4. **Coverage unchanged.**
+   - Whole field R² 0.99 per seed.
+   - Every patch at 0.99–1.00.
+   - Decode at the SST-only caps.
+
+**Open.**
+- Chaotic children are less pure: the g_rw hinge (target 0.25) is already met by chaos-led mixtures, so nothing
+  pushes them to shed their mixed-in cycle.
+- The remaining noise is cycle-led mixtures.

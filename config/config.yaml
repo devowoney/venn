@@ -151,12 +151,17 @@ train:
       p_cut: 0.8          # cyclic vs not. DEFAULT 0.8 (D-036, 2026-11-02; F-30: truth cyclic/QP 0.99-1.00, chaos/noise
                           # <= 0.22). WHY not 0.5: untrained half-domain blends (p 0.6-0.9) and cycle+chaos mixtures
                           # passed as cyclic and the eye collapsed to cyclic (F-31)
-      g_cut: 0.1          # chaotic vs noise (F-30: Lorenz 0.18-0.41, noise <= 0)
+      g_measure: rw       # DEFAULT (D-040, 2026-11-03): g = 1 - sum e_nl / sum e_lin, random features on the whitened
+                          # embedding. abs = the D-035 gain mean(e_lin - e_nl): chaos seen through the SST low-pass
+                          # scored 0.02-0.10 and was called noise (F-33)
+      g_cut: 0.12         # chaotic vs noise, g_rw scale (F-33: chaos >= 0.24 incl. SST+noise, noise <= 0.004; midway).
+                          # Was 0.1 on the abs scale (F-30)
       beta_p: 10.0        # logit scales of the soft vote (same role as soft.beta)
       beta_g: 25.0
       p_target: 0.97      # cyclic: be predictable at the horizon. DEFAULT 0.97 (D-036): a cyclic channel must shed its
                           # mixed-in chaos to ~3 %; at 0.9 a mixture (~10 % chaos) already satisfied the hinge (F-31)
-      g_target: 0.2       # chaotic: carry at least the weakest truth Lorenz mode's determinism
+      g_target: 0.25      # chaotic: carry at least the weakest truth Lorenz mode's determinism (g_rw: SST+noise 0.24;
+                          # was 0.2 on the abs scale)
       p_cap: 0.3          # chaotic: not long-predictable (truth Lorenz <= 0.22)
       noise_penalty: structure  # DEFAULT (D-036, 2026-11-02): noise pays min(cyclic, chaotic) penalty -- pushed toward
                           # its nearest real family, never cheaper than it. none = noise is free (the D-035 ruling):
@@ -166,7 +171,7 @@ train:
       # (matched at p_target 0.9 / p_cut 0.5; under the 0.97 / 0.8 defaults the cyclic hinge's init gradient is
       # 0.73x |g_white| -- kept, the D-036 runs used 2.8)
       lambda_pcyc: 2.8
-      lambda_g: 18.6
+      lambda_g: 18.6      # matched on the abs scale; kept under g_rw (D-040: layer 2 has no L_white to re-match)
       lambda_pcap: 1.2
     slow_period_min: 128.0  # slow rungs: put power at periods >= this
     fast_period_max: 24.0   # fast rungs: put power at periods <= this

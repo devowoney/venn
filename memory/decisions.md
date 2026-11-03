@@ -1133,6 +1133,32 @@ idea of 'sharpen sight'." Rulings:
   - runs `obs_t8000_l2_seed*` (one per accepted layer-1 seed)
   - readouts `kernels.py` (layer-2 mode), `capture.py`, `coverage.py`
 
+## D-040 — Chaos score g = RELATIVE gain on a WHITENED embedding (g_rw); cut 0.12, target 0.25
+
+**Date:** 2026-11-03. **Source:** F-33 (W2 step 2c) and the user: "Let's adopt g_rw and rerun layer 2". Amends the g
+of D-035; windows, leads, ridge, p_long and the family order are unchanged.
+
+- **Problem.** Through the SST low-pass (AR1 τ 20), clean single chaotic modes scored g 0.02–0.10 and were labelled
+  noise (13 layer-2 children). Two scale effects: the absolute gain e_lin − e_nl is capped by the tiny short-lead
+  linear error of a smooth signal, and the kernel width (median embedded distance) is set by the smooth part, so the
+  random features cannot resolve the fine directions where the forcing shows.
+- **Rule.** `g = 1 − Σ_{h≤22} e_nl(h) / Σ_{h≤22} e_lin(h)`: the share of the linear error that the nonlinear ridge
+  removes. The random features are drawn on the delay vectors after PCA whitening (fit rows; eigenvalues floored at
+  1e-6 × the largest), so every direction gets the same kernel scale. The linear ridge is invariant to the whitening.
+- **Cuts (F-33, 132 test signals).** Chaos min 0.24 (SST + noise), noise max 0.004 (raw and low-passed controls).
+  - `g_cut 0.12`: midway in the gap.
+  - `g_target 0.25`: the weakest truth Lorenz mode (SST view + noise), the same rule as D-035's 0.2.
+  - `beta_g 25` and `lambda_g 18.6` kept. `lambda_g` was matched to the old scale; layer 2 has no `L_white` to
+    re-match against.
+- **Gradient.** The whitening matrix and the kernel width are scales, computed without gradient. There is no
+  gradient through `eigh`, which is unstable at near-degenerate eigenvalues.
+- **Consequence (assumed; the user did not rule on it).** A mixture with a chaotic component now scores chaotic instead
+  of noise: 20/29 noise-labelled layer-2 mixtures in F-33.
+- **Flag.** `train.spectral.pred.g_measure: rw | abs`. Default `rw`. `abs` = the D-035 score, kept to reproduce the
+  older runs. Their own `.hydra` configs lack the key, so they read as `abs`.
+- **Runs.** Layer 2 rerun on the accepted layer-1 parents → `obs_t8000_l2rw_seed*`. Compare with
+  `obs_t8000_l2_seed*`.
+
 ## Numbering collisions with the encoder track
 
 The module-2 (`latent-predictor`) branch and the parallel `stationary-observer` (encoder) session both
@@ -1793,6 +1819,9 @@ Penalties are hinges in the same quantities, and noise has none. Code: `src/trai
 name `noise` for the 4th family. Calibration and cuts: F-30.
 Defaults since D-036: `pred.p_cut 0.8`, `pred.p_target 0.97`, `pred.noise_penalty: structure` (noise pays
 `min(pen_cyc, pen_chao)`), with `soft.lambda_pop 0`. Evidence and limits: F-31.
+Since D-040 (2026-11-03): `pred.g_measure: rw`, so g = 1 − Σe_nl/Σe_lin, with the random features on a PCA-whitened
+embedding (whitening without gradient). `g_cut 0.12`, `g_target 0.25`. It catches chaos seen through the SST
+low-pass, which the absolute gain missed (F-33). `abs` = the D-035 score.
 
 ### Flatness measure `train.spectral.flat_measure` (added 2026-10-29; `log` is the DEFAULT, user)
 

@@ -1967,3 +1967,28 @@ run scope stays M=10 × 5 seeds.
 - User asked whether disjoint eyes are uncorrelated: mostly yes, but ~10 % of disjoint pairs correlate (shared
   modes, SSH/SST copies, coupled Lorenz coordinates).
 - **User: "accept layer 1 and plan layer 2."**
+
+#### 2026-11-03 — W2 step 2c: chaos seen through SST labelled noise (F-33, calibration only)
+
+- User: handle the layer-2 readout's "chaos seen through SST labelled noise" (clean single chaotic modes, |corr|
+  0.99–1.00 with a mode's SST view, called noise; the F-30 g calibration gap).
+- Diagnosis: g is an absolute gain capped by the tiny short-lead linear error of a smooth signal, and its kernel width
+  is set by the smooth part. Probe `src/probes/sst_chaos.py` → `.tmps/sst_chaos/` compares g0 with relative /
+  whitened / adapted-lag / relative+whitened variants on raw + AR1-low-passed truth modes and controls, and on all
+  live layer-2 children.
+- Result = F-33: g_rw (relative gain on a whitened embedding) separates 132/132 with gap 0.24 (g0: 108/132, gap
+  0.02); all 19 chaotic-SST-view children → chaotic (13 were noise). Side effect: 20/29 noise-labelled mixtures
+  also → chaotic. Adapted lag makes it worse.
+- No default or training code changed. No commits (user handles git). Next: user decides whether g_rw replaces g
+  (then a D-entry + SOP first, cut / target re-set, layer 2 rerun).
+- **User: "adopt g_rw and rerun layer 2".** The user did not rule on the mixture side effect; it was assumed
+  (mixtures with a chaotic part → chaotic). Steps:
+  - D-040 + the SOP 02 family-measure note.
+  - `pred.g_measure: rw` (default) / `abs` in `src/train/predictability.py`; `g_cut 0.12`, `g_target 0.25`.
+  - Checks: torch g_rw = probe within 0.005; `abs` reproduces the stored layer-2 g (2e-6); gradients finite.
+- Runs `obs_t8000_l2rw_seed0..4` → F-34.
+  - Noise 42 → 23 children; 0 clean chaotic-SST children labelled noise (was 13). Coverage unchanged.
+  - Chaotic children are chaos-led but less pure (median best |corr| 0.80 vs 0.91). The noise left is cycle-led
+    mixtures.
+- No commits (user handles git). Next, for the user: whether to push chaotic children toward purity, and what to
+  do with cycle-led noise.

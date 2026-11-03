@@ -5,8 +5,10 @@ quasi-periodic signal chaotic (F-30: 36/36 wrong). Chaos is a property of the DY
 how well its OWN past predicts its future -- an observer-side measuring stick, not module 2:
 
   p_long = 1 - e_long(64)   LINEAR ridge on a long delay window (span 120): predictable at the forecast horizon?
-  g      = mean_{h<=22} (e_lin(h) - e_nl(h))   on a short window (span 14): does a NONLINEAR ridge beat the linear one?
+  g      = 1 - sum_{h<=22} e_nl(h) / sum_{h<=22} e_lin(h)   on a short window (span 14), random features on the
+           WHITENED delay vectors (D-040, F-33): the share of the linear error a NONLINEAR ridge removes.
            A linear score is fixed by the spectrum (Wiener-Kolmogorov); only this gain sees determinism.
+           `pred.g_measure: abs` = the D-035 absolute gain mean_h (e_lin - e_nl), which misses chaos seen through SST.
 
 e(h) = test MSE / var, fit on the first half of the series and scored on the second (in-sample, 512 random features
 would "predict" white noise). Everything is closed-form ridge, so the scores are differentiable in the series and
@@ -66,14 +68,32 @@ def pred_scores(S: torch.Tensor, pc, rff: dict) -> tuple[torch.Tensor, torch.Ten
     E = _embed(x, m_s, s_s, t)                                 # [K,N,m_s]
     Y = torch.stack([x[:, t + h] for h in range(1, h_g + 1)], dim=2)   # [K,N,h_g]
     F_lin = torch.cat([one, E], dim=2)
+    rw = str(pc.get("g_measure", "abs")) == "rw"               # missing key = a pre-D-040 run: the absolute gain
+    Ef = E
+    if rw:
+        # D-040: whiten the delay vectors before the random features. A smooth (e.g. SST low-passed) channel's
+        # embedding is dominated by its slow direction; the median-distance kernel then cannot see the fine
+        # directions where the chaotic forcing shows (F-33). The whitening is a SCALE, like the kernel width: no
+        # gradient through eigh (unstable at near-degenerate eigenvalues).
+        with torch.no_grad():
+            mu = E[:, fit].mean(1, keepdim=True)
+            C = (E[:, fit] - mu).transpose(1, 2) @ (E[:, fit] - mu) / int(fit.sum())
+            lam, V = torch.linalg.eigh(C)
+            lam = lam.clamp_min(1e-6 * lam[:, -1:])            # floor: a noise-free smooth signal stays finite
+            Wh = V / lam.sqrt()[:, None, :]
+        Ef = (E - mu) @ Wh
     with torch.no_grad():                                      # kernel width = median embedded distance (a scale,
-        sub = E[:, fit][:, :: max(1, int(fit.sum()) // 400)]   # not something the eye should optimize)
+        sub = Ef[:, fit][:, :: max(1, int(fit.sum()) // 400)]  # not something the eye should optimize)
         ell = torch.cdist(sub, sub).flatten(1).median(dim=1).values.clamp_min(1e-6)   # [K]
-    Z = (E @ rff["W"]) / ell[:, None, None] + rff["b"]
+    Z = (Ef @ rff["W"]) / ell[:, None, None] + rff["b"]
     F_nl = torch.cat([F_lin, (2.0 / rff["W"].shape[1]) ** 0.5 * torch.cos(Z)], dim=2)
     e_lin = _ridge_err(F_lin, Y, fit, te, float(pc.lam_lin))
     e_nl = _ridge_err(F_nl, Y, fit, te, float(pc.lam_nl))
-    g = (e_lin - e_nl).mean(dim=1)
+    if rw:   # RELATIVE gain: the share of the linear error the nonlinear ridge removes. The absolute gain is capped
+        #      by a smooth signal's tiny short-lead e_lin; a ratio of sums cannot blow up on a near-zero e_lin(1)
+        g = 1.0 - e_nl.sum(dim=1) / e_lin.sum(dim=1).clamp_min(1e-12)
+    else:    # D-035: absolute gain mean_h (e_lin - e_nl)
+        g = (e_lin - e_nl).mean(dim=1)
     return (1.0 - e_long).to(S.dtype), g.to(S.dtype)
 
 
