@@ -33,8 +33,9 @@ import matplotlib.pyplot as plt                            # noqa: E402
 from src.models.history_forecaster import HistoryForecaster   # noqa: E402
 from src.probes.family import amp_ratio, label_family, series_stats   # noqa: E402
 
-FAMS = ("stationary", "cyclic", "chaotic")
-COL = {"stationary": "#7a7a7a", "cyclic": "#1f77b4", "chaotic": "#d62728"}
+# "noise" = the 4th family of the layered observer (D-041): what layer 2 could not decompose
+FAMS = ("stationary", "cyclic", "chaotic", "noise")
+COL = {"stationary": "#7a7a7a", "cyclic": "#1f77b4", "chaotic": "#d62728", "noise": "#9467bd"}
 
 
 def load_run(run: str, device: str):
@@ -54,7 +55,7 @@ def load_run(run: str, device: str):
         state = {**state, "spread": state["spread"][:, None].expand(-1, ck["K"]).contiguous()}
     model.load_state_dict(state)
     model.eval()
-    art = np.load(os.path.join(ck["encoder_run"], "artifacts.npz"))
+    art = np.load(os.path.join(ck["encoder_run"], "artifacts.npz"), allow_pickle=True)
     return model, nm, art, int(nm["t_tr"])
 
 
@@ -111,7 +112,9 @@ def ens_scores(ens: np.ndarray, truth: np.ndarray):
 
 def eval_one(run: str, device: str, members: int = 32) -> dict:
     model, nm, art, t_tr = load_run(run, device)
-    S = art["S"].astype(np.float64)
+    # the same observer outputs the forecaster was trained on (a layered run drops its faded children, D-041)
+    ch = nm["channels"] if "channels" in nm.files else np.arange(art["S"].shape[1])
+    S = art["S"][:, ch].astype(np.float64)
     T, K = S.shape
     A = model.A
     z = (S - nm["mu"]) / nm["sd"]
@@ -161,7 +164,8 @@ def eval_one(run: str, device: str, members: int = 32) -> dict:
     sk_early = lead_scores(pred[:half], truth[:half], pers[:half])[0]
     sk_late = lead_scores(pred[half:], truth[half:], pers[half:])[0]
 
-    fams = channel_families(S, t_tr)
+    # families as the forecaster was trained with them (the observer's vote for a layered run); old runs: relabel
+    fams = [str(f) for f in nm["fam"]] if "fam" in nm.files else channel_families(S, t_tr)
 
     # --- hidden modes: can the forecast be read back into the generator's modes? -------------------
     amp_true = art["truth_amp"].astype(np.float64)                  # [n_modes,T]
@@ -222,7 +226,7 @@ def main() -> None:
     for r in R:
         pop = {f: r["fams"].count(f) for f in FAMS}
         lines.append(f"{os.path.basename(r['run'])}: causality max|diff|={r['causality_maxdiff']:.2e}  "
-                     f"channels {pop['stationary']}/{pop['cyclic']}/{pop['chaotic']}")
+                     f"channels stat/cyc/chao/noise {pop['stationary']}/{pop['cyclic']}/{pop['chaotic']}/{pop['noise']}")
     lines.append("")
     lines += ["RMSE (standardized units: 1 = one training std of the channel). Lower is better.",
               "  model       = history forecaster",
@@ -297,8 +301,8 @@ def main() -> None:
     # ------------------------------ figure ------------------------------------------------------
     # Read top to bottom: (1) how big is the error, against the two "no-skill" references;
     # (2) what individual forecasts look like; (3) phase (corr), amplitude, and the hidden modes.
-    fig = plt.figure(figsize=(16, 14))
-    gs = fig.add_gridspec(3, 3, hspace=0.42, wspace=0.25)
+    fig = plt.figure(figsize=(21, 14))
+    gs = fig.add_gridspec(3, len(FAMS), hspace=0.42, wspace=0.25)
     for j, fam in enumerate(FAMS):
         ax = fig.add_subplot(gs[0, j])
         suf, fac, ylab = rmse_unit(fam)
@@ -380,7 +384,7 @@ def main() -> None:
 
 
 def fan_figure(R: list, out: str) -> None:
-    """The three families' ensembles in ONE unit: deviation from the channel's level, % of its signal size (D-033).
+    """Every family' ensembles in ONE unit: deviation from the channel's level, % of its signal size (D-033).
 
     In training-std units a stationary channel's ~4 % leak is magnified to unit variance and its fan looks as wide as a
     chaotic one; against the level it sits on, a stable signal shows as what it is -- a narrow fan.
@@ -402,8 +406,8 @@ def fan_figure(R: list, out: str) -> None:
                 cols.append(v if key != "ratio" else r["ratio"][:, c])
         return np.concatenate(cols, 1) if cols else np.full((A, 0), np.nan)
 
-    fig = plt.figure(figsize=(17, 10))
-    gs = fig.add_gridspec(2, 3, hspace=0.4, wspace=0.24)
+    fig = plt.figure(figsize=(22, 10))
+    gs = fig.add_gridspec(2, len(FAMS), hspace=0.4, wspace=0.24)
     r0 = R[0]
     t_a = r0["t_tr"] + 300
     ts = np.arange(t_a - 32, t_a + 3 * 80 + 16)
@@ -435,7 +439,7 @@ def fan_figure(R: list, out: str) -> None:
     if axes:
         lo, hi = min(a.get_ylim()[0] for a in axes), max(a.get_ylim()[1] for a in axes)
         for a in axes:
-            a.set_ylim(lo, hi)                                      # ONE scale for the three families
+            a.set_ylim(lo, hi)                                      # ONE scale for every family
 
     for j, (key, title, ylab) in enumerate([("rmse", "RMSE of the ensemble mean (all seeds)", "RMSE, % of signal size"),
                                             ("spread", "ensemble spread (all seeds)", "spread, % of signal size"),
@@ -463,7 +467,7 @@ def fan_figure(R: list, out: str) -> None:
         ax.set_xlim(1, A)
         ax.set_ylim(bottom=0)
         ax.legend(fontsize=8, loc="upper left")
-    fig.suptitle(f"Ensembles of the three families in ONE unit (deviation from the level, % of signal size) — "
+    fig.suptitle(f"Ensembles of every family in ONE unit (deviation from the level, % of signal size) — "
                  f"validation [{r0['t_tr']},{r0['T']}), {len(R)} seeds", fontsize=13)
     fig.savefig(out, dpi=105, bbox_inches="tight")
     print(f"[eval] wrote {out}")
@@ -473,8 +477,8 @@ def ens_figure(R: list, Q: list, out: str) -> None:
     """Ensemble (chaotic channels carry the uncertainty) vs the deterministic reference, same launches."""
     A = R[0]["rmse"].shape[0]
     leads = np.arange(1, A + 1)
-    fig = plt.figure(figsize=(16, 14))
-    gs = fig.add_gridspec(3, 3, hspace=0.42, wspace=0.25)
+    fig = plt.figure(figsize=(21, 14))
+    gs = fig.add_gridspec(3, len(FAMS), hspace=0.42, wspace=0.25)
     # row 1: RMSE of the best estimate per family, ensemble mean vs deterministic reference
     for j, fam in enumerate(FAMS):
         ax = fig.add_subplot(gs[0, j])

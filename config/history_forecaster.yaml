@@ -9,7 +9,12 @@ hf:
   t_tr: 2000            # training set = [0, t_tr); validation set = [t_tr, T). Must equal the encoder's t_train
   t_fit: null           # targets used for fitting are < t_fit. null = t_tr (final run).
                         # t_fit = 1750 -> DEVELOPMENT run: hyperparameters judged on [1750, 2000), never on validation
-  leads: 64             # direct heads psi_{t+1} ... psi_{t+leads}; lead 1 is the primary target
+  channels: auto        # which observer outputs form the history (D-041): live = drop the layer-2 children the observer
+                        # marks `faded` (< 2 % of their parent's cells, unscored) | all | auto = live if the run is layered
+  family_source: auto   # who names each channel's family (D-041): observer = the layer-2 4-family vote (stationary /
+                        # cyclic / chaotic / noise) | labeller = module 2's old 3-family rule (src/probes/family.py) |
+                        # auto = observer if the run is layered, else labeller (single-layer runs reproduce F-27)
+  leads: 64            # direct heads psi_{t+1} ... psi_{t+leads}; lead 1 is the primary target
   stationary_scale: std # how STATIONARY channels (amp_ratio < 0.05 on the fitting range) are scaled before the model
                         # reads them: std = own std like every channel (ruling 2026-10-01, F-27) | level = signal size
                         # sqrt(mu^2+sd^2): a stationary history is "level + leak" and the ~4 % leak is not magnified

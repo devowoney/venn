@@ -27,6 +27,36 @@ from src.models.history_forecaster import HistoryForecaster   # noqa: E402
 from src.probes.family import amp_ratio, label_family, series_stats   # noqa: E402
 
 
+# the layer-2 observer names its families by role (slow/fast are the stationary/chaotic roles of the old ladder)
+ROLE_TO_FAMILY = {"slow": "stationary", "cyclic": "cyclic", "fast": "chaotic", "noise": "noise"}
+
+
+def history_channels(art, t_fit: int, channels: str = "auto", family_source: str = "auto"):
+    """Which observer outputs form the history, and the family of each (SOP 04 "Reading a LAYERED observer", D-041).
+
+    A layered (layer-2) observer marks children that hold almost none of their parent's cells as `faded`: it does not
+    score them, so they are not channels of the history. Its own 4-family vote (`roles`) names the families; a
+    single-layer run has neither, and falls back to all channels + module 2's old labeller (fitting range only).
+    Returns (channel indices into art["S"], family list).
+    """
+    S = art["S"].astype(np.float64)
+    layered = "faded" in art.files
+    if channels == "auto":
+        channels = "live" if layered else "all"
+    keep = np.flatnonzero(~art["faded"]) if channels == "live" else np.arange(S.shape[1])
+    if family_source == "auto":
+        # only a LAYERED run's roles are a family vote; a single-layer run's `roles` are the rungs it was assigned
+        family_source = "observer" if layered else "labeller"
+    if family_source == "observer":
+        fam = [ROLE_TO_FAMILY[str(r)] for r in art["roles"][keep]]
+    else:
+        X = S[:t_fit, keep]
+        mu, sd = X.mean(0), X.std(0) + 1e-8
+        fam = [label_family(series_stats((X[:, i] - mu[i]) / sd[i]), amp_ratio=amp_ratio(X[:, i]))
+               for i in range(X.shape[1])]
+    return keep, fam
+
+
 def lead_mask(t0: int, T: int, t_fit: int, leads: int, min_sight: int, device) -> torch.Tensor:
     """[T,A] bool: which (position, lead) pairs enter the loss for a sequence starting at absolute time t0.
 
@@ -142,16 +172,18 @@ def main(cfg: DictConfig) -> None:
     # --- data: the TRAINING set only -----------------------------------------------------------
     run = hf.encoder_run if os.path.isabs(hf.encoder_run) else os.path.join(hydra.utils.get_original_cwd(),
                                                                           hf.encoder_run)
-    S = np.load(os.path.join(run, "artifacts.npz"))["S"].astype(np.float64)   # [T,K]
-    T_all, K = S.shape
+    art = np.load(os.path.join(run, "artifacts.npz"), allow_pickle=True)
     t_tr = int(hf.t_tr)
     t_fit = int(hf.t_fit) if hf.t_fit else t_tr
+    # the history's channels and their families (chaos mask for the ensemble head, stationary rescaling below):
+    # a layered observer hands its live outputs + its own family vote; a single-layer one is labelled here, on the
+    # FITTING range only
+    channels, fam = history_channels(art, t_fit, str(hf.get("channels", "auto")), str(hf.get("family_source", "auto")))
+    S = art["S"][:, channels].astype(np.float64)                      # [T,K]
+    T_all, K = S.shape
     assert t_fit <= t_tr < T_all, (t_fit, t_tr, T_all)
-    # channel std spans ~10 .. ~1000: standardize with statistics of the fitting range only
+    # channel std spans ~0.02 .. ~1000: standardize with statistics of the fitting range only
     mu, sd_std = S[:t_fit].mean(0), S[:t_fit].std(0) + 1e-8
-    # family labels decided on the FITTING range only (chaos mask for the ensemble head, stationary rescaling below)
-    fam = [label_family(series_stats((S[:t_fit, i] - mu[i]) / sd_std[i]), amp_ratio=amp_ratio(S[:t_fit, i]))
-           for i in range(K)]
     stationary = np.array([f == "stationary" for f in fam])
     sd = sd_std.copy()
     if str(hf.get("stationary_scale", "std")) == "level":
@@ -175,7 +207,9 @@ def main(cfg: DictConfig) -> None:
         # afterwards how wide each one is. `chaos` is the scenario MASK the model uses -- here all ones.
         chaos = np.ones(K, dtype=np.float32)
     np.savez("norm.npz", mu=mu, sd=sd, sd_std=sd_std, stationary=stationary, t_fit=t_fit, t_tr=t_tr, chaos=chaos,
-             chaos_label=chaos_label)
+             chaos_label=chaos_label, channels=channels, fam=np.array(fam))
+    print(f"[hf] history = {K} of the observer's {art['S'].shape[1]} outputs; families "
+          + " / ".join(f"{f} {fam.count(f)}" for f in ("stationary", "cyclic", "chaotic", "noise")))
     if use_ens:
         print(f"[hf] ensemble ON: scenarios on {int(chaos.sum())} channels {np.flatnonzero(chaos).tolist()} "
               f"(chaotic-labelled: {np.flatnonzero(chaos_label).tolist()}); M={members} members, "

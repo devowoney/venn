@@ -1498,3 +1498,52 @@ Readouts:
 - Chaotic children are less pure: the g_rw hinge (target 0.25) is already met by chaos-led mixtures, so nothing
   pushes them to shed their mixed-in cycle.
 - The remaining noise is cycle-led mixtures.
+
+---
+
+### F-35. History forecaster on the LAYERED observer: purer channels, same hidden-mode information, chaotic modes forecast a little worse at mid leads (2026-11-03)
+
+Runs `.tmps/runs_hf/l2rw_all_seed{0..4}` (`launch_l2.sh`) on `feature-observer/.tmps/runs/obs_t8000_l2rw_seed*`
+(layer 2, D-040), F-27 recipe; eval `.tmps/eval_hf/l2rw_all/` (`summary.txt`, `hf_eval.png`, `hf_fan.png`), comparison
+with F-27 `vs_single_layer.png/.txt` (`.tmps/eval_hf/l2rw_all_vs_f27.py`). Decision: D-041.
+
+1. **History:** 38-52 live channels per seed (13 faded children dropped out of 236); families (observer vote, 5 seeds
+   pooled) stationary 41 / cyclic 83 / chaotic 77 / noise 23. Causality 0.0 on every seed. Regression: on the old
+   single-layer runs `auto` reproduces the F-27 chaos labels on 5/5 seeds.
+2. **Per family, RMSE % of signal size, h1/h8/h16/h64:** stationary 0.4/0.4/0.4/0.4, cyclic 2.9/5.0/7.0/8.1, chaotic
+   2.9/18.0/27.2/41.8, noise 2.4/4.6/7.0/12.0 (F-27, single layer: 0.5/0.6/1.1/3.5, 3.2/9.3/15.3/20.1,
+   4.7/28.8/41.4/56.2). Lower in every family, but NOT a like-for-like gain: the channels are different (purer
+   children), so this mostly says each layer-2 channel is easier to forecast. Spread/error ~0.85-1.1 in every family.
+3. **Hidden generator modes (the comparable test, same field and seeds):** ceiling equal (cyclic 0.887, chaotic
+   0.908/0.909) -> layer 2 keeps all the information layer 1 had. Cyclic modes forecast equally (h64 0.879 vs 0.882).
+   Chaotic modes WORSE at mid leads: h8 0.709 vs 0.788, h16 0.590 vs 0.668, equal at h1 (0.90) and h64 (0.15-0.17).
+4. **Stationary children** are a level + a tiny white-ish wiggle (std down to 0.02): corr 0.76 at h1 in std units, but
+   0.4 % of size at every lead (climatology 0.8 %).
+5. **Seen in the fans:** some chaotic members spike far beyond the truth (seed 0 ch3, -400 % of size). Not investigated.
+6. Faded children are dropped as the observer defines them, but 2 are not empty (seed 0 std 14, seed 3 std 1.9): a small
+   loss of signal, not measured.
+Likely cause of item 3 (untested): each chaotic mode is now split over several children, and the loss weights all ~45
+channels equally, so the chaotic dynamics get a smaller share of the fit than with 9-10 of 16 channels.
+
+---
+
+### F-36. The chaotic mid-lead loss of F-35 comes from forecasting the CHILDREN, not from the readout, the new layer-1 observer, or the stationary children (2026-11-03)
+
+Runs `.tmps/runs_hf/l1_all_seed*` (control: same recipe on layer 1 alone, `launch_l1.sh`), `.tmps/runs_hf/l2rw_lvl_seed*`
+(layer 2 + `hf.stationary_scale=level`, `launch_l2lvl.sh`); probe `.tmps/eval_hf/chaos_midlead/` (`diag.py`,
+`diag_l2rw_all.txt`, `diag_l2rw_lvl.txt`, `figure.py` -> `chaos_midlead.png`). Hidden chaotic modes, corr, 5 seeds.
+
+1. **Not the readout.** Ridge 1e-3 / 1e-2 / 1e-1 on the layer-2 channels: h8 0.709 / 0.708 / 0.692.
+2. **Not the new layer-1 observer.** Layer-1 control: h8 0.776, h16 0.637 (F-27 older observer: 0.788 / 0.668).
+3. **The layering.** Same 16 parent eyes, same truth, one shared ridge: children forecasts summed h4/h8/h16 0.848 /
+   0.696 / 0.581 vs layer-1 control 0.874 / 0.776 / 0.637 (ceiling 0.907). Chaotic parents' RMSE (parent-std units)
+   h8 0.331 vs 0.273, h16 0.514 vs 0.476; equal at h1 and h64. Cyclic parents are also slightly worse (h8 0.150 vs 0.134)
+   -> a general loss of forecast quality on the children, largest on chaos.
+4. **Not the stationary children** (hypothesis rejected). They carry 94 % (h1) / 55 % (h8) of the summed squared error in
+   std units (layer 1: 33 % / 17 %), but scaling them by signal size (D-033 flag) recovers almost nothing: parents h8
+   0.707 (vs 0.696), chaotic-parent RMSE h8 0.318 (vs 0.331).
+Open: why the children forecast worse than their sum. The input information is the same (a parent = a linear sum of
+its children, readable by the token projection), so the suspects are the OUTPUT side (each child is fitted and scored
+separately; nothing asks the children's sum to be right) and capacity (K 16 -> ~45 with d=64, dropout/wd tuned at K=16).
+User ruling (2026-11-04): the deepest children's forecast is module 2's endpoint; recombining into parents is not a
+criterion. F-36 item 3 stays as a measurement, not as a defect to fix.

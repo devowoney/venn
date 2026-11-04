@@ -1992,3 +1992,37 @@ run scope stays M=10 × 5 seeds.
     mixtures.
 - No commits (user handles git). Next, for the user: whether to push chaotic children toward purity, and what to
   do with cycle-led noise.
+
+### 2026-11-03 — Module 2 reads the layered observer (D-041, F-35), branch `history-forecastor`
+
+User: "Now the eye-lobe observer is changed to detect the signal with layered structure. Adapt hippocampus to new
+configuration and test it." (hippocampus = the history forecaster here; observer layer 2 = D-038/D-039/D-040 on
+`feature-observer`, runs `obs_t8000_l2rw_seed*`.)
+
+- No observer code brought over: module 2 only reads `artifacts.npz`. SOP 04 subsection + D-041 written first.
+- Code: `src/train/train_history_forecaster.py` (`history_channels()`: live layer-2 channels, observer families;
+  `norm.npz` + `channels`, `fam`), `config/history_forecaster.yaml` (`hf.channels`, `hf.family_source`, both `auto`),
+  `src/probes/eval_history_forecaster.py` (4th family "noise", reads the trained channel set / families, 4-column
+  figures). Bug caught by the regression check: old single-layer artifacts also carry `roles` (assigned rungs), so
+  `auto` keys on the layered marker `faded`, not on `roles`.
+- Runs `l2rw_all_seed0..4` (F-27 recipe) -> F-35: every family's error lower in % of size (purer channels); hidden-mode
+  ceiling unchanged; chaotic modes forecast worse at h8-h16 (0.71 vs 0.79). No commits (user handles git).
+- Next, for the user: accept as is, or first look at the chaotic mid-lead loss (e.g. weight channels per parent eye /
+  per family in the loss, or feed layer 1 + layer 2).
+
+#### Same day — user: "first look into the chaotic mid-lead loss" (F-36)
+
+- Control on layer 1 alone (`l1_all_seed*`), a parent-level like-for-like probe (`.tmps/eval_hf/chaos_midlead/`), and a
+  ridge sweep. Result: the loss is real and comes from forecasting the children (same parents: h8 0.70 vs 0.78).
+- Hypothesis "the stationary children's magnified wiggle starves the chaotic fit" (they own 94 % of the h1 error) tested
+  with the existing D-033 flag (`l2rw_lvl_seed*`): rejected, h8 0.71.
+- Defaults unchanged. No commits (user handles git). Next, for the user: test capacity (d=128) or a parent-level target
+  (score the children's sum against the parent), one at a time.
+
+#### 2026-11-04 — User ruling on F-36: the children's forecast IS the endpoint
+
+User: "why the forecast should go back up to the parents? ... the latest children (if nested decomposition) forecast is
+the end point of the hippocampus forecaster." -> Summing children into parents was only a like-for-like ruler (F-36), not
+a requirement. Judged at the endpoint (per family, % of size, spread/error, causality) the layered history forecasts well
+(F-35). The hidden-mode drop at h8-h16 is an answer-key readout, a question for module 3 if anywhere. Proposed: accept
+D-041 as the module-2 setting; capacity / parent-target tests not pursued unless the user asks.

@@ -1159,6 +1159,17 @@ of D-035; windows, leads, ridge, p_long and the family order are unchanged.
 - **Runs.** Layer 2 rerun on the accepted layer-1 parents → `obs_t8000_l2rw_seed*`. Compare with
   `obs_t8000_l2_seed*`.
 
+## D-041 — The history forecaster reads the LAYERED observer: live layer-2 channels, the observer's own 4 families
+
+**Date:** 2026-11-03. **Source:** user "Now the eye-lobe observer is changed to detect the signal with layered
+structure. Adapt hippocampus to new configuration and test it." Numbered after the observer track's D-040
+(`feature-observer`). SOP 04 "Reading a LAYERED observer".
+
+- History = layer-2 output minus faded children; families = the observer's layer-2 vote (stationary/cyclic/chaotic/
+  noise) instead of module 2's old labeller. Model, loss, standardization, ensemble setting unchanged (F-27 setting).
+- Flags `hf.channels: auto|live|all` and `hf.family_source: auto|observer|labeller`; `auto` = layered artifacts ->
+  live + observer, single-layer artifacts -> all + labeller (old runs reproduce unchanged).
+
 ## Numbering collisions with the encoder track
 
 The module-2 (`latent-predictor`) branch and the parallel `stationary-observer` (encoder) session both
@@ -2596,6 +2607,32 @@ training trajectory. Same system, same generator seed, 4x longer training record
 - Forecasters: deterministic `hf.t_tr=8000` (fit `[0,8000)`); ensemble `hf.t_tr=8000 hf.t_fit=7750` (spread
   calibration on `[7750,8000)`, the same 250-step held-out slice as before). All other hyperparameters unchanged, so
   the only change against F-21/F-22 is the training length.
+
+#### Reading a LAYERED observer (D-041, user 2026-11-03: "the eye-lobe observer now detects the signal with a layered structure; adapt the hippocampus")
+
+The observer is now two layers (D-038/D-039/D-040, branch `feature-observer`): layer 1 = family-free sensor (16 mixed
+eyes), layer 2 = every non-cyclic eye split into 4 children that each take a family, cyclic eyes passed through. The
+history is the LAYER-2 output (`artifacts.npz` of a `train_layer2` run, e.g. `obs_t8000_l2rw_seed*`). Nothing in the
+forecaster model changes: it already reads any number of channels. Three things change in what it is handed:
+
+- **Channels = the live layer-2 outputs** (`hf.channels: live`, automatic when the artifacts carry `faded`). A child
+  holding < 2 % of its parent's mass is "faded": the observer does not score it, so it is not a channel of the history
+  (most have std ~0.01 and would blow up in z). The children of a parent add up to it, so layer 1 is still inside the
+  history: nothing the sensor saw is lost. ~42-52 channels per seed instead of 16. `norm.npz` records `channels`
+  (indices into the observer's S) so training and evaluation read the same set.
+- **Family labels come from the OBSERVER** (`hf.family_source: observer`, automatic when the artifacts carry `roles`):
+  the layer-2 4-family vote stationary / cyclic / chaotic / **noise** (role names slow/cyclic/fast/noise). Why: the
+  observer now decides families with the calibrated predictability score (F-30, F-33); module 2's old 3-family labeller
+  (`src/probes/family.py`) is the one F-30 found wrong on quasi-periodic and noise signals. `labeller` = the old rule,
+  still the only option for a single-layer run. Labels are used for the stationary rescaling flag, the chaotic scenario
+  mask (`ensemble.families: chaotic`), and grouping in the readout.
+- **Readout has a 4th family "noise"** (what the observer could not decompose: mostly cycle-led mixtures, F-34).
+  Read in training-std units like cyclic/chaotic.
+
+Unchanged: z-scoring per channel with fitting-range stats (2026-10-01 ruling), stationary read in % of signal size
+(D-033), the F-27 ensemble setting (`families: all`, `spread_from: score`, `t_tr=8000`, `t_fit=7750`).
+Comparison with the single-layer observer: per-channel RMSE is NOT comparable across observers (different channels);
+the comparable numbers are the **hidden-mode readout** (same field, same seeds) and the per-family RMSE in % of size.
 
 ## SOP 05 — Frontal Decoder (module 3, "frontal cortex")
 
