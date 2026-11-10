@@ -141,6 +141,20 @@ def eval_one(run: str, device: str, members: int = 32, ensemble_fn=None) -> dict
             zhat = model(zt[None, : T - 1])[0].cpu().numpy()       # [T-1,A,K]: forecast made at t from z_0..z_t
             ens = zhat[L][:, None]                                  # a deterministic model = a 1-member ensemble
     caus = causality_check(model, zt, t_tr + 100)
+    return score(run, nm, art, t_tr, S, z, L, ens, zhat, caus, bool(model.ensemble or ensemble_fn is not None))
+
+
+def score(run: str, nm, art, t_tr: int, S: np.ndarray, z: np.ndarray, L: np.ndarray, ens: np.ndarray,
+          zhat: np.ndarray, caus: float, is_ens: bool) -> dict:
+    """The readout of one run from its members, whatever forecaster made them (split out for D-044's flow forecaster).
+
+    S [T,K] observer outputs, z [T,K] model units, L [N] launch times, ens [N,M,A,K] members (M = 1: deterministic),
+    zhat [T-1,A,K] best estimate (only zhat[L] is scored; the rest is plotted), caus = causality max|diff|.
+    """
+    T, K = S.shape
+    A = ens.shape[2]
+    idx = L[:, None] + np.arange(1, A + 1)[None, :]                # [N,A] target times
+    truth = z[idx]                                                  # [N,A,K]
     pred = zhat[L]                                                  # [N,A,K]
     if ens.shape[1] > 1:
         crps, ratio, mamp = ens_scores(ens, truth)
@@ -201,7 +215,7 @@ def eval_one(run: str, device: str, members: int = 32, ensemble_fn=None) -> dict
     return dict(run=run, t_tr=t_tr, T=T, n_launch=len(L), causality_maxdiff=caus, fams=fams,
                 skill=skill, corr=corr, amp=amp, rmse=rmse, rmse_p=rmse_p, rmse_c=rmse_c,
                 rmse_size=rmse_size, rmse_p_size=rmse_p_size, rmse_c_size=rmse_c_size,
-                crps=crps, ratio=ratio, mamp=mamp, rough=rough, is_ens=bool(model.ensemble or ensemble_fn is not None), L=L,
+                crps=crps, ratio=ratio, mamp=mamp, rough=rough, is_ens=is_ens, L=L,
                 sp16=None if sp16 is None else sp16 * to_size, er16=er16 * to_size,   # [N,K] fraction of signal size
                 ens_ex=ens[:, :8] * to_std if ens.shape[1] > 1 else None, sk_early=sk_early, sk_late=sk_late, hor=horizon(corr),
                 mode_fam=[f for f, m in zip(mode_fam, moving) if m], mode_corr=mc_pred, mode_ceil=mc_ceil,

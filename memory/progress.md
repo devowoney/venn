@@ -2059,3 +2059,16 @@ HSV spread on the latent forecaster; nothing implemented yet (questions Q1-Q7 op
 - Built: twin `twin_seed*`, `src/models/hsv_spread.py`, `src/probes/hsv_rollout_check.py`, `src/probes/eval_hsv_spread.py`,
   `eval_one(..., ensemble_fn)` + `report()` in the eval probe. Result F-38. No commits (user handles git).
 - Next, for the user: emulator error (Q1 b) and/or the 4D-Var refinement of B (2b).
+
+#### 2026-11-10 — Per-eye FLOW-MATCHING forecaster, step 1 (D-044, F-39), branch `history-forecastor`
+User: "test a totally different forecaster [HSV set aside] ... from 1-D history for an eye, I want a spread, maybe
+flow-matching style"; the physical-time "rollout velocity" idea was dropped (pure rollout explodes, D-043 check) for a
+flow in FLOW time over the whole 64-lead future. Q1: "(a) shared model, go ahead". Built `src/models/eye_flow.py`,
+`config/eye_flow.yaml`, `src/train/train_eye_flow.py`, `src/probes/eval_eye_flow.py`; `eval_history_forecaster.eval_one`
+split into load + `score()` so any ensemble reuses the SOP 04 readout. Seed 0 trained and read (F-39). Figures shown to
+the user; next step (user decides): per-lead target scale for the over-wide short-lead / cyclic fans, then 5 seeds.
+- User: "go ahead with per-lead scale, then 5 seeds". Built `ef.target_scale` (none | lead | history_lead; σ = s_h·g_a
+  inside `EyeFlow`, density corrected by −Σ log σ). 5 seeds scaled + 5 seeds reference -> F-40: fans calibrated in
+  every family, but rougher members, worse chaotic joint NLL and worse cyclic h64 mean. `eval_eye_flow` fixed for
+  per-seed eye lists (`prob.npz` saved). Decision on the trade-off left to the user.
+- User ruling: "go back to no scale" -> config default `target_scale: none`; current recipe = `flow_seed{0..4}`.

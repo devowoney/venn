@@ -1603,3 +1603,65 @@ members, α by held-out CRPS. Design record `memory/hsv_spread_design.md`. % of 
 5. Reading (Q1 measurement): most of the real error growth is NOT start errors amplified by the emulator's dynamics but
    the emulator's own error accumulating (ε, Q_z, excluded in this step). Per-launch spread vs error rank corr at h16:
    stationary +0.24, cyclic +0.40, chaotic +0.44, noise +0.20.
+
+---
+
+### F-39. Per-eye flow forecaster: one eye's own history gives a family-ordered, mostly honest spread; too wide at short lead and on cyclic eyes (D-044, 2026-11-10)
+
+Run `.tmps/runs_ef/flow_seed0` (`launch_flow.sh`; observer `obs_t8000_l2rw_seed0`, 43 live eyes, one shared network,
+376k params, 20k steps, best held-out checkpoint step 18000). Eval `.tmps/eval_ef/flow_seed0/` (`summary.txt`,
+`flow_summary.txt`, `hf_fan.png`, `hf_eval.png`, `flow_prob.png`). Validation [8000,10000), 1937 launches, 32 members.
+% of signal size, h1/h4/h8/h16/h64:
+
+| family | spread | RMSE of the members' mean | spread/error |
+|---|---|---|---|
+| stationary | 0.4/0.4/0.4/0.4/0.5 | 0.4/0.4/0.4/0.5/0.5 | 0.99/1.00/1.00/0.98/1.00 |
+| cyclic | 3.9/4.6/4.8/4.9/6.2 | 3.4/3.9/4.0/4.0/4.2 | 1.34/1.40/1.46/1.41/1.64 |
+| chaotic | 6.8/15.0/25.5/30.5/44.6 | 4.8/12.5/22.6/28.7/46.1 | 1.43/1.20/1.12/1.08/0.97 |
+| noise | 2.3/4.6/6.6/7.6/9.6 | 1.9/5.1/7.3/9.0/10.7 | 1.23/0.91/0.89/0.84/0.89 |
+
+1. **No memorization:** training and held-out flow loss stay together to the end (0.417 / 0.415); sharing one network
+   over 43 eyes gives 320k windows.
+2. **The spread comes from the history alone and follows the family** (the model never sees eye or family): stationary
+   0.4 %, cyclic ~5 %, noise ~8 %, chaotic growing 7 -> 45 %. Members are coherent scenarios (roughness 0.98-1.15;
+   chaotic members keep the oscillation and drift out of phase in `hf_fan.png`). Per launch, at h16, wider fan <->
+   larger error: rank corr stationary +0.52, cyclic +0.48, chaotic +0.58, noise +0.15.
+3. **Calibration (spread/error, rank histograms):** stationary honest at every lead (flat ranks); chaotic honest from
+   h8 on (flat ranks at h16/h64), too wide at h1-h4 (hump); cyclic too wide at every lead (hump, 1.3-1.6); noise (3
+   eyes) too narrow beyond h4 and biased: the truth is above all members ~3x more often than chance at h16/h64.
+4. **Probability of the truth** (exact flow density, 243 launches x 43 eyes, nats per lead, z units): flow vs the
+   members' own diagonal Gaussian -- stationary +1.00 vs +1.07, cyclic -1.55 vs -1.17, chaotic -1.20 vs +0.82, noise
+   -1.44 vs +0.56. Modelling the 64 leads JOINTLY is what makes the chaotic/noise futures probable.
+5. Causality 0 (window ends at t). Reading (hypothesis, untested): the over-wide fans are where the target is tiny
+   next to the N(0,1) noise it starts from (lead 1, cyclic increments) -- the flow must shrink the noise ~20-50x and
+   stops short. A per-lead scale of the target (y_a / σ_a, σ_a = training RMS of the a-step increment) would test it.
+
+---
+
+### F-40. Per-lead target scale fixes the over-wide fans (5 seeds); the chaotic joint density gets worse and members get rougher (D-044 step 2, 2026-11-10)
+
+Runs `.tmps/runs_ef/flowsc_seed{0..4}` (`target_scale=history_lead`) and reference `flow_seed{0..4}` (`none`), launcher
+`launch_5seeds.sh`; observers `obs_t8000_l2rw_seed{0..4}` (43/49/52/38/42 live eyes: 41 stationary, 83 cyclic, 77
+chaotic, 23 noise). Eval `.tmps/eval_ef/flowsc/` and `.tmps/eval_ef/flow/` (`summary.txt`, `flow_summary.txt`,
+`hf_fan.png`, `flow_prob.png`, `prob.npz`). Every run: training ≈ held-out flow loss (no memorization), causality 0.
+5-seed means, spread/error h1/h4/h16/h64 (scaled | reference):
+
+| family | scaled | reference | RMSE % h1/h16/h64 scaled \| ref | NLL nats/lead scaled \| ref | roughness |
+|---|---|---|---|---|---|
+| stationary | 1.00/1.02/1.04/1.22 | 1.00/1.00/0.99/1.02 | 0.4/0.5/0.5 \| 0.4/0.4/0.4 | +0.82 \| +0.83 | 1.09 \| 0.99 |
+| cyclic | 1.03/1.03/1.02/1.14 | 1.32/1.27/1.26/1.42 | 2.9/5.5/7.4 \| 3.2/4.8/5.2 | −1.47 \| −1.47 | 1.14 \| 1.10 |
+| chaotic | 1.16/1.12/1.02/0.98 | 1.38/1.11/1.00/0.92 | 3.7/29.1/42.1 \| 4.8/28.9/41.9 | −0.94 \| −1.19 | 1.17 \| 1.07 |
+| noise | 1.00/0.98/0.95/1.05 | 1.13/0.99/0.93/0.98 | 2.8/10.3/13.6 \| 3.0/10.6/13.3 | −0.98 \| −0.99 | 1.16 \| 1.08 |
+
+1. **The F-39 hypothesis holds:** with the target at size ~1 for every lead (g_a 1.0 at h1 -> 17 at h64), the short-lead
+   and cyclic over-dispersion is gone. Rank histograms nearly flat at h1 and h16 for all families (reference: cyclic and
+   chaotic humps at h1, cyclic hump at every lead). Per-launch spread vs error at h16: rank corr stationary +0.42,
+   cyclic +0.52, chaotic +0.57, noise +0.32.
+2. **Accuracy of the members' mean:** better at short lead (chaotic h1 3.7 vs 4.8 %, cyclic h1 2.9 vs 3.2 %), worse for
+   cyclic at long lead (h64 7.4 vs 5.2 %); chaotic/noise long lead unchanged.
+3. **Costs:** members rougher in every family (member step / true step 1.09-1.17 vs 0.99-1.10); stationary too wide at
+   h64 (1.22, hump at rank ~15 in `flow_prob.png`); chaotic joint NLL worse by 0.24 nats/lead (−0.94 vs −1.19 on all 5
+   seeds), the other families equal. Reading (untested): the flow's small errors in scaled units are multiplied by
+   g_a (up to 17) on the way back, which adds lead-to-lead jitter; the truth is smooth, so the JOINT density drops
+   although each lead's marginal is better calibrated.
+4. Remaining: chaotic and noise slightly too narrow in the tails at h64 (rank 0 / 32 bins ~1.2-1.3).

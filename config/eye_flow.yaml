@@ -1,0 +1,47 @@
+# VENN module 2 — PER-EYE FLOW FORECASTER (D-044, SOP 04 "Per-eye flow forecaster"). Every hyperparameter lives here (D-014).
+# One network, shared by all live eyes, reads ONE eye's 1-D history and draws possible 64-lead futures of that eye.
+#   python -m src.train.train_eye_flow ef.encoder_run=<feature-observer>/.tmps/runs/obs_t8000_l2rw_seed0
+defaults:
+  - config              # inherit seed / device from the encoder config
+  - _self_
+
+ef:
+  encoder_run: null     # frozen observer run dir holding artifacts.npz (required)
+  t_tr: 8000            # [0, t_tr) = training set; [t_tr, T) = validation, never read here
+  t_fit: 7750           # targets used for fitting are < t_fit; [t_fit, t_tr) = held-out slice for model selection
+  channels: auto        # same eyes as the transformer forecaster (live layer-2 children, D-041)
+  # --- window ---
+  hist_len: 256         # steps of the eye's own past the model reads (32 patches of 8)
+  leads: 64             # one sample = the next 64 values (increments from the launch value)
+  hist_patch: 8
+  lead_patch: 4         # future tokens of 4 leads -> 16 tokens that attend to each other (joint sample)
+  target_scale: none    # D-044 step 2: the flow runs on y_a / σ_a(h). DEFAULT none (user 2026-11-10, after F-40:
+                        # "go back to no scale"): smoother members and better chaotic joint NLL outweigh the calibrated
+                        # short-lead / cyclic fans of history_lead, which stays an EXPERIMENT.
+                        # none = σ ≡ 1 (step 1, F-39: fans too wide at lead 1 and on cyclic eyes, where y << N(0,1)) |
+                        # lead = σ_a = g_a, training RMS of y_a pooled over eyes (chaotic eyes set it) |
+                        # history_lead = σ_a = s_h · g_a, s_h = RMS one-step change of the window's own history
+  # --- model ---
+  d: 64
+  enc_layers: 3
+  dec_layers: 3
+  heads: 4
+  dropout: 0.1          # one trajectory per eye but 43 eyes share the network: K x T windows, milder than the
+                        # transformer forecaster's 0.4. Watch the held-out flow loss for memorization
+  # --- optimization ---
+  steps: 20000
+  batch: 512            # windows per step, drawn uniformly over (eye, launch)
+  lr: 5.0e-4
+  weight_decay: 0.05
+  grad_clip: 1.0
+  eval_every: 500       # held-out flow loss (fixed noise and τ) -> TensorBoard; the best checkpoint is kept
+  # --- sampling / density (evaluation) ---
+  ode_steps: 16         # Heun steps noise -> future (and back, for the density)
+  members: 32
+  probes: 4             # Hutchinson probes for the divergence in log p
+
+hydra:
+  run:
+    dir: ${hydra:runtime.cwd}/.tmps/runs_ef/${now:%Y%m%d_%H%M%S}
+  job:
+    chdir: true

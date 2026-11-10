@@ -1213,6 +1213,31 @@ spread mechanism under study (D-042 runs kept as the reference).
 - Members: n = 8 SVs, δ_m = α Σ ξ_{m,i} v_i, ± pairs, 32 members, one α by CRPS on held-out [7750, 8000) (Q6b).
 - Readout = F-37 readout + growth spectrum, family loading of the SVs, error projection on the evolved SVs (Q7).
 
+## D-044 — PER-EYE FLOW-MATCHING forecaster: a spread from one eye's own 1-D history (a separate forecaster)
+
+**Date:** 2026-11-10. **Source:** user "I want to test a totally different forecaster [not against HSV] ... from 1-D
+history for an eye, I want a spread, maybe flow-matching style"; "(a) shared model, go ahead". SOP 04 "Per-eye flow
+forecaster". A NEW forecaster beside the transformer emulator; it does not replace D-041..D-043 and is not judged
+against HSV.
+
+- Input = ONE eye's own history only (no other eye, no eye identity, no family): the spread must come from the shape
+  of the history. One network SHARED by all live eyes (user Q1 (a)): K x T windows instead of one trajectory per model.
+- Output = the joint distribution of the next 64 values of that eye. One sample = one whole 64-lead future (a coherent
+  scenario); no rollout in physical time (pure rollout exploded in the D-043 one-seed check).
+- Generative model = conditional flow matching (linear noise -> data path in FLOW time τ, unrelated to physical time).
+- Probability = exact change of variables along the flow ODE (log-density of any future, incl. the truth -> NLL).
+- Step 1: seed 0, fit [0,7750), held-out [7750,8000) for model selection, validation [8000,10000); figures to the user
+  before anything else.
+- Step 2 (user 2026-11-10, after F-39: "go ahead with per-lead scale, then 5 seeds"): the target is divided by a
+  per-window, per-lead scale σ_a(h) = s_h · g_a before the flow sees it (`ef.target_scale: history_lead`). s_h = RMS
+  one-step change of the window's own history (from the history only, so the eye stays hidden); g_a = training RMS of
+  y_a / s_h. Why not one pooled σ_a: the chaotic eyes would set it and cyclic increments would stay tiny next to the
+  N(0,1) start. Reference = the step-1 recipe (`none`) on the same 5 seeds.
+- **Ruling after F-40 (user 2026-11-10): "go back to no scale".** Default `ef.target_scale: none`; the step-1 recipe
+  (`flow_seed{0..4}`, eval `.tmps/eval_ef/flow/`) is the current per-eye flow forecaster. `history_lead` stays in the
+  code as an experiment (calibrated fans, but rougher members, chaotic joint NLL −0.94 vs −1.19, cyclic h64 mean 7.4 vs
+  5.2 %).
+
 ## Numbering collisions with the encoder track
 
 The module-2 (`latent-predictor`) branch and the parallel `stationary-observer` (encoder) session both
@@ -2727,6 +2752,38 @@ member : δ_m = α Σ_i ξ_{m,i} v_i , ξ ~ N(0,1), ± pairs, 32 members; member
   start perturbation under rollout vs direct. Fallback if the rollout drifts: chunked rollout (direct heads in blocks).
 - Field rebuilt from the observer run's own `.hydra` config (`generate_field` + `normalize_input`); check
   `max|S − S_art| / std(S)` ≈ 1e-5.
+
+#### Per-eye flow forecaster (D-044, user 2026-11-10: "from 1-D history for an eye, I want a spread, flow-matching style")
+
+A separate forecaster: it reads ONE eye's past and draws possible futures of that eye. One network serves every eye
+(the eye's name and family are hidden), so a wide or a narrow fan can only come from what the history looks like.
+
+```
+data   : live layer-2 eyes of the observer run, z = (S − μ)/σ with μ, σ of the fitting range (same z as the twin)
+window : launch t, eye k:  h = z_k[t−L+1 .. t]  (L = 256),  read as (z, z − z_t) per step, patches of 8 -> 32 tokens
+target : y_a = z_k[t+a] − z_k[t],  a = 1..64   (increments from the launch value; ONE 64-dim sample)
+path   : y_τ = (1−τ) ε + τ y,  ε ~ N(0, I_64),  τ ~ U[0,1]            (flow time, not physical time)
+loss   : ‖ v_θ(y_τ, τ, h) − (y − ε) ‖²                                  (flow matching: learn the velocity)
+v_θ    : history encoder (self-attention over the 32 history tokens) +
+         future decoder (16 tokens of 4 leads: self-attention, cross-attention to the history, τ added per layer)
+sample : ε -> y by Heun on dy/dτ = v_θ (16 steps); member = z_t + y; 32 members per launch
+density: log p(y | h) = log N(ε(y); 0, I) − ∫_0^1 div v_θ dτ  (ODE run backwards from the data;
+         div by Hutchinson, 4 Rademacher probes). Units: nats per lead in z units of the eye
+```
+
+- Training windows: every (eye, t) with t ≥ L−1 and all 64 targets < t_fit. Model selection: the flow loss on
+  windows whose targets lie in the held-out [t_fit, t_tr), with FIXED noise and τ (so it is comparable across steps);
+  the best checkpoint is kept. Validation [t_tr, T) is never seen.
+- Readout: the SOP 04 ensemble readout (`report()` of `eval_history_forecaster.py`: RMSE of the members' mean by lead,
+  spread, spread/error, CRPS, roughness, per-launch spread vs error, fans) + the NLL of the truth per family and lead.
+  Reference for the density: a diagonal Gaussian with the members' own per-lead mean and std (what is gained by
+  modelling the 64 leads JOINTLY).
+- Causality: the window ends at t, so the forecast cannot see the future; checked by replacing z after t with noise.
+- Target scale (`ef.target_scale`, D-044 step 2): the flow runs on ỹ_a = y_a / σ_a(h); members y = σ ⊙ ỹ; density
+  log p(y|h) = log p(ỹ|h) − Σ_a log σ_a(h).
+  `none` = σ ≡ 1 (step 1, F-39) | `lead` = σ_a = g_a, pooled training RMS of y_a | `history_lead` = σ_a = s_h · g_a,
+  s_h = RMS of the window's own one-step changes (floor 1e-4), g_a = training RMS of y_a / s_h. Why: at lead 1 and on
+  cyclic eyes y is 20-50x smaller than the N(0,1) start, and the step-1 fans stayed too wide exactly there (F-39).
 
 ## SOP 05 — Frontal Decoder (module 3, "frontal cortex")
 
