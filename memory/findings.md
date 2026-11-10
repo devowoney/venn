@@ -1547,3 +1547,59 @@ its children, readable by the token projection), so the suspects are the OUTPUT 
 separately; nothing asks the children's sum to be right) and capacity (K 16 -> ~45 with d=64, dropout/wd tuned at K=16).
 User ruling (2026-11-04): the deepest children's forecast is module 2's endpoint; recombining into parents is not a
 criterion. F-36 item 3 stays as a measurement, not as a defect to fix.
+
+---
+
+### F-37. Learned scenarios: every member is one rollout, the width is learned and follows the family and the launch; under-dispersed beyond h4 (D-042, 2026-11-04)
+
+Runs `.tmps/runs_hf/learned_seed{0..4}` (`launch_learned.sh`): D-041 recipe with `families=all calibrate=false
+lambda_step=1` (no family mask, no certainty score, no spread factor; step CRPS). Eval `.tmps/eval_hf/learned/`
+(`summary.txt`, `hf_fan.png`, `hf_eval.png`); diagnosis of the old setting `.tmps/eval_hf/learned_unc/`. 5 seeds x 1937
+validation launches, 32 members. % of signal size, h1/h4/h8/h16/h64:
+
+| family | spread | RMSE of the mean | spread/error | roughness |
+|---|---|---|---|---|
+| stationary | 0.4/0.4/0.4/0.4/0.4 | 0.4/0.4/0.4/0.4/0.4 | 0.96/0.96/0.94/0.92/0.90 | 0.95 |
+| cyclic | 2.8/3.3/3.9/4.5/5.7 | 3.0/3.7/5.1/7.0/8.2 | 0.95/0.88/0.78/0.67/0.74 | 1.00 |
+| chaotic | 3.1/7.7/13.6/17.4/28.5 | 2.9/7.6/17.7/26.9/42.2 | 1.04/1.04/0.79/0.64/0.66 | 0.93 |
+| noise | 2.2/2.7/3.7/4.9/7.6 | 2.4/3.0/4.9/7.7/13.0 | 0.95/0.91/0.76/0.63/0.63 | 0.99 |
+
+1. **Members are rollouts:** member step / true step 0.93-1.00 in every family (F-27 setting: chaotic 1.66 raw, 2.90
+   with the score inflation; spikes to -400 % of size are gone).
+2. **The width is learned and follows the variability:** at h16 stationary 0.4 %, cyclic 4.5 %, noise 4.9 %, chaotic
+   17.4 % -- nothing tells the model a family. Within a family it follows the launch: lead-16 per-launch spread vs error
+   rank corr stationary +0.43, cyclic +0.49, chaotic +0.54, noise +0.29; the deciles run parallel to the diagonal.
+3. **Honest to h4, under-dispersed beyond:** spread/error 0.6-0.8 at h8-h64 for cyclic / chaotic / noise (stationary 0.90).
+   Same as the raw learned spread of D-041 -> a generalization gap (trained on the trajectory it is scored on), not
+   fixed by the step term. Learning it from the 250-step held-out slice was rejected (D-042).
+4. **Accuracy unchanged** vs D-041 (RMSE % of size equal within 0.4 at every lead and family; hidden chaotic modes h8
+   0.72 vs 0.71, h16 0.61 vs 0.59). Causality 0.0 on all seeds.
+
+---
+
+### F-38. Spread from B-norm singular vectors of the twin: the vectors point at the real errors, but start errors grow too slowly — wide early, narrow late (D-043, 2026-11-10)
+
+Runs: twin `.tmps/runs_hf/twin_seed{0..4}` (deterministic, fit [0,7750)); probe `src/probes/eval_hsv_spread.py` ->
+`.tmps/eval_hf/hsv/spread/` (`summary.txt`, `hsv_summary.txt`, `hf_fan.png`, `hsv_diag.png`). B_x from the smooth part of
+the 1-step field change (ℓ 5.7-6.7 cells), eye sizes measured (B-fix a), n = 8 SVs at a* = 16, chunk-16 members, 32
+members, α by held-out CRPS. Design record `memory/hsv_spread_design.md`. % of signal size, h1/h4/h8/h16/h64:
+
+| family | spread | RMSE of the members' mean | spread/error |
+|---|---|---|---|
+| stationary | 0.1/0.1/0.1/0.2/0.2 | 0.4/0.4/0.4/0.4/0.5 | 0.28/0.37/0.37/0.41/0.45 |
+| cyclic | 4.5/7.0/9.5/13.4/15.1 | 3.0/4.2/5.6/7.5/15.1 | 1.80/1.71/1.74/1.82/1.13 |
+| chaotic | 16.0/24.9/24.3/26.5/29.9 | 3.5/13.2/25.1/28.8/45.5 | 3.96/2.01/1.12/1.00/0.65 |
+| noise | 3.6/6.4/8.0/10.5/11.9 | 2.3/3.6/6.3/8.2/16.3 | 1.76/1.91/1.41/1.48/0.80 |
+
+1. **The singular vectors are where the errors come from:** 49-58 % of the real lead-16 error lies in the span of the 8
+   evolved patterns (chance 15-21 %); start patterns load 53-79 % on chaotic channels (chance 26-40 %), stationary ~0
+   after B-fix (a) (rule std 0.66-2.49 -> measured 0-0.03). The family ordering of the spread emerges by itself.
+2. **α = 1 on 4/5 seeds (1.78 on seed 4):** the best start size is one step of the field's own smooth change.
+3. **Wrong shape across leads:** the singular vectors grow only ~1.4-2.3x by lead 16 (σ_1), while the real error grows
+   ~8x (chaotic 3.5 -> 28.8 %). One α must then serve all leads: chaotic 4x too wide at h1, honest at h8-h16, 0.65 at
+   h64; cyclic too wide at every lead; stationary too narrow (its error is noise the start cannot carry).
+4. **Cost to the best estimate:** the members' mean is worse than the twin's direct forecast (chaotic h8 25.1 vs 19.1,
+   cyclic h64 15.1 vs 8.9): large ± perturbations do not cancel through the nonlinear forecaster, plus chunk-16 feedback.
+5. Reading (Q1 measurement): most of the real error growth is NOT start errors amplified by the emulator's dynamics but
+   the emulator's own error accumulating (ε, Q_z, excluded in this step). Per-launch spread vs error rank corr at h16:
+   stationary +0.24, cyclic +0.40, chaotic +0.44, noise +0.20.

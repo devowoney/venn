@@ -55,6 +55,10 @@ hf:
     members: 8          # members per launch during training (fair CRPS is unbiased for any M >= 2)
     noise_dim: 16       # size of the per-member noise vector eps
     lambda_crps: 1.0    # weight of the chaotic-channel CRPS against the non-chaotic MSE
+    lambda_step: 0.0    # D-042: weight of the fair CRPS on each member's lead-to-lead STEP (x_a - x_{a-1}, x_0 = the
+                        # initial condition): every member must move like the system moves = one coherent rollout,
+                        # not noise around the mean. 0 = F-27 loss. Learned-scenario recipe: families=all
+                        # calibrate=false lambda_step=1
     calibrate: true     # after training, fit a per-lead spread inflation on [t_fit, t_tr) (held-out end of the
                         # training set; needs t_fit < t_tr, e.g. hf.t_fit=1750). Fixes the overconfidence (SOP 04)
 

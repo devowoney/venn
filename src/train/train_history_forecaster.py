@@ -83,12 +83,14 @@ def fair_crps(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
 
 
 def forecast_loss(model: HistoryForecaster, z: torch.Tensor, t0: int, t_fit: int, min_sight: int,
-                  members: int = 0, lambda_crps: float = 1.0, input_noise: float = 0.0):
+                  members: int = 0, lambda_crps: float = 1.0, input_noise: float = 0.0, lambda_step: float = 0.0):
     """Loss of one history z [1,T,K] over all valid (position, lead).
 
     Deterministic model (members = 0): mean squared error on every channel.
     Ensemble model: MSE of the base forecast on the NON-chaotic channels + lambda_crps x fair CRPS of the members on
     the CHAOTIC channels (SOP 04) -- the chaotic channels are asked for an honest spread, not for the mean.
+    lambda_step > 0 (D-042): + fair CRPS of each member's lead-to-lead step, so a member is a rollout that moves like
+    the system moves, not a value redrawn at every lead.
     """
     T, A = z.shape[1], model.A
     # history corruption (anti-memorization): the model READS a noisy history but is scored against the clean
@@ -110,7 +112,17 @@ def forecast_loss(model: HistoryForecaster, z: torch.Tensor, t0: int, t_fit: int
     mse = (sq * m * (1 - c)).sum() / (m.sum() * (1 - c).sum()).clamp_min(1.0)
     crps = fair_crps(ens.permute(0, 1, 3, 4, 2), tgt)                  # [1,T,A,K]
     crps = (crps * m * c).sum() / (m.sum() * c.sum()).clamp_min(1.0)
-    return mse + lambda_crps * crps
+    loss = mse + lambda_crps * crps
+    if lambda_step > 0:
+        # the per-lead CRPS above is marginal: it cannot tell a smooth member from one that jumps between unrelated
+        # values at every lead. Scoring the STEPS too asks every member to move like the truth moves. Lead 1's step
+        # starts from the clean observed initial condition z_t, the same for members and truth.
+        x0 = z[:, :, None, None, :].expand(-1, -1, ens.shape[2], 1, -1)            # [1,T,M,1,K]
+        step = torch.diff(torch.cat([x0, ens], dim=3), dim=3)                      # [1,T,M,A,K]
+        step_tgt = torch.diff(torch.cat([z[:, :, None], tgt], dim=2), dim=2)       # [1,T,A,K]
+        cs = fair_crps(step.permute(0, 1, 3, 4, 2), step_tgt)
+        loss = loss + lambda_step * (cs * m * c).sum() / (m.sum() * c.sum()).clamp_min(1.0)
+    return loss
 
 
 @torch.no_grad()
@@ -201,6 +213,7 @@ def main(cfg: DictConfig) -> None:
     chaos = np.array([f == "chaotic" for f in fam], dtype=np.float32)
     members = int(ens_cfg.members) if use_ens else 0
     lam = float(ens_cfg.lambda_crps) if use_ens else 0.0
+    lam_step = float(ens_cfg.get("lambda_step", 0.0)) if use_ens else 0.0
     chaos_label = chaos.copy()                                         # the family labels themselves, for the record
     if use_ens and str(ens_cfg.get("families", "chaotic")) == "all":
         # multi-scenario for the WHOLE family: every channel gets scenarios (and CRPS); the certainty score decides
@@ -213,7 +226,7 @@ def main(cfg: DictConfig) -> None:
     if use_ens:
         print(f"[hf] ensemble ON: scenarios on {int(chaos.sum())} channels {np.flatnonzero(chaos).tolist()} "
               f"(chaotic-labelled: {np.flatnonzero(chaos_label).tolist()}); M={members} members, "
-              f"noise_dim={int(ens_cfg.noise_dim)}")
+              f"noise_dim={int(ens_cfg.noise_dim)}, lambda_step={lam_step}")
     model = HistoryForecaster(K, leads=int(hf.leads), d=int(hf.d), layers=int(hf.layers),
                               heads=int(hf.heads), dropout=float(hf.dropout),
                               chaos_mask=chaos if use_ens else None,
@@ -231,7 +244,7 @@ def main(cfg: DictConfig) -> None:
         # B long histories z[s0 : t_fit] with random start: varied lengths, all ending at the fit boundary
         for s0 in torch.randint(0, int(hf.max_start), (int(hf.batch),), generator=g).tolist():
             loss = loss + forecast_loss(model, z_fit[None, s0:], s0, t_fit, int(hf.min_sight), members, lam,
-                                        float(hf.get("input_noise", 0.0)))
+                                        float(hf.get("input_noise", 0.0)), lam_step)
         loss = loss / int(hf.batch)
         opt.zero_grad()
         loss.backward()

@@ -110,7 +110,9 @@ def ens_scores(ens: np.ndarray, truth: np.ndarray):
     return crps, spread / np.maximum(rmse_mean, 1e-12), member_amp
 
 
-def eval_one(run: str, device: str, members: int = 32) -> dict:
+def eval_one(run: str, device: str, members: int = 32, ensemble_fn=None) -> dict:
+    """Score one run on validation. ensemble_fn(model, nm, art, zt, L) -> members [N,M,A,K] (model units): an
+    ensemble made OUTSIDE the model (D-043 HSV members of a deterministic twin); the best estimate is its mean."""
     model, nm, art, t_tr = load_run(run, device)
     # the same observer outputs the forecaster was trained on (a layered run drops its faded children, D-041)
     ch = nm["channels"] if "channels" in nm.files else np.arange(art["S"].shape[1])
@@ -125,7 +127,11 @@ def eval_one(run: str, device: str, members: int = 32) -> dict:
     idx = L[:, None] + np.arange(1, A + 1)[None, :]                # [N,A] target times
     truth = z[idx]                                                  # [N,A,K]
     with torch.no_grad():
-        if model.ensemble:
+        if ensemble_fn is not None:
+            ens = ensemble_fn(model, nm, art, zt, L)                 # [N,M,A,K]
+            zhat = model(zt[None, : T - 1])[0].cpu().numpy()       # direct forecast everywhere ...
+            zhat[L] = ens.mean(1)                                   # ... the members' mean at the scored launches
+        elif model.ensemble:
             torch.manual_seed(0)                                    # reproducible member draws
             e = model(zt[None, : T - 1], members=members)[0]       # [T-1,M,A,K]
             ens = e[torch.as_tensor(L, device=e.device)].cpu().numpy()   # [N,M,A,K]
@@ -140,6 +146,18 @@ def eval_one(run: str, device: str, members: int = 32) -> dict:
         crps, ratio, mamp = ens_scores(ens, truth)
     else:                                                           # CRPS of a point forecast = MAE; no spread
         crps, ratio, mamp = np.abs(pred - truth).mean(0), np.zeros(pred.shape[1:]), pred.std(0) / (truth.std(0) + 1e-12)
+    # ROUGHNESS (D-042): does a member move like the system moves? RMS lead-to-lead step of the members (lead 1 from
+    # the initial condition z_t) over the RMS step of the truth. 1 = a coherent rollout; >> 1 = noise around the mean.
+    ic = z[L][:, None, None, :]                                     # [N,1,1,K]
+    m_step = np.diff(np.concatenate([np.broadcast_to(ic, (len(L), ens.shape[1], 1, K)), ens], 2), axis=2)
+    t_step = np.diff(np.concatenate([z[L][:, None, :], truth], 1), axis=1)
+    rough = np.sqrt((m_step ** 2).mean((0, 1, 2))) / (np.sqrt((t_step ** 2).mean((0, 1))) + 1e-12)   # [K]
+    del m_step
+    # PER-LAUNCH uncertainty at lead 16 (D-042): does a wider fan come with a larger error, launch by launch?
+    # member spread and |error of the mean| of every launch, z units (converted to % of size below)
+    a16 = min(16, A) - 1
+    sp16 = np.sqrt((ens.shape[1] + 1) / ens.shape[1] * ens[:, :, a16].var(1, ddof=1)) if ens.shape[1] > 1 else None
+    er16 = np.abs(pred[:, a16] - truth[:, a16])
     # PERSISTENCE starts from each forecast's own initial condition: the last observed state z_t at the launch
     # time t, held constant over every lead ("nothing changes from now on"). Its error grows with the lead.
     pers = np.repeat(z[L][:, None, :], A, axis=1)
@@ -183,7 +201,8 @@ def eval_one(run: str, device: str, members: int = 32) -> dict:
     return dict(run=run, t_tr=t_tr, T=T, n_launch=len(L), causality_maxdiff=caus, fams=fams,
                 skill=skill, corr=corr, amp=amp, rmse=rmse, rmse_p=rmse_p, rmse_c=rmse_c,
                 rmse_size=rmse_size, rmse_p_size=rmse_p_size, rmse_c_size=rmse_c_size,
-                crps=crps, ratio=ratio, mamp=mamp, is_ens=bool(model.ensemble), L=L,
+                crps=crps, ratio=ratio, mamp=mamp, rough=rough, is_ens=bool(model.ensemble or ensemble_fn is not None), L=L,
+                sp16=None if sp16 is None else sp16 * to_size, er16=er16 * to_size,   # [N,K] fraction of signal size
                 ens_ex=ens[:, :8] * to_std if ens.shape[1] > 1 else None, sk_early=sk_early, sk_late=sk_late, hor=horizon(corr),
                 mode_fam=[f for f, m in zip(mode_fam, moving) if m], mode_corr=mc_pred, mode_ceil=mc_ceil,
                 z=z * to_std, zhat=zhat * to_std,                     # plotted in training-std units
@@ -216,6 +235,11 @@ def main() -> None:
     os.makedirs(args.out, exist_ok=True)
     R = [eval_one(r, args.device, args.members) for r in args.runs]
     Q = [eval_one(r, args.device, args.members) for r in args.ref]
+    report(R, Q, args.out)
+
+
+def report(R: list, Q: list, out_dir: str) -> None:
+    """summary.txt, results.json and the figures for scored runs R (and references Q), written to out_dir."""
     A = R[0]["skill"].shape[0]
     leads = np.arange(1, A + 1)
     show = [1, 2, 4, 8, 16, 32, 64]
@@ -273,6 +297,22 @@ def main() -> None:
         mc = np.array([r["mode_ceil"][:, [i for i, f in enumerate(r["mode_fam"]) if f == fam]].mean(1) for r in R])
         lines.append(f"  {fam:<9}" + "".join(f" h{a}:{mp[:, a - 1].mean():.2f}/{mc[:, a - 1].mean():.2f}"
                                           for a in show))
+    if R[0]["is_ens"]:
+        # D-042: the scenarios' uncertainty per family, in ONE unit (% of signal size) so families compare directly
+        lines += ["", "SCENARIOS (ensemble). spread and RMSE of the ensemble mean in % of signal size;",
+                  "  spread/error ~1 = honest uncertainty; roughness = member step / true step (1 = moves like the system)", ""]
+        lines.append(f"{'':<34}" + "".join(f"  h{a:<5}" for a in show) + "  roughness")
+        for fam in FAMS:
+            if not any(fam in r["fams"] for r in R):
+                continue
+            sp = np.array([fam_mean({**r, "sp_size": r["ratio"] * r["rmse_size"]}, "sp_size", fam) for r in R]) * 100
+            er = np.array([fam_mean(r, "rmse_size", fam) for r in R]) * 100
+            ra = np.array([fam_mean(r, "ratio", fam) for r in R])
+            ro = np.median([x for r in R for x, f in zip(r["rough"], r["fams"]) if f == fam])
+            lines.append(f"  {fam + ' spread %':<32}" + "".join(f"  {np.nanmean(sp[:, a - 1]):5.1f}" for a in show)
+                         + f"  {ro:.2f}")
+            lines.append(f"  {fam + ' RMSE %':<32}" + "".join(f"  {np.nanmean(er[:, a - 1]):5.1f}" for a in show))
+            lines.append(f"  {fam + ' spread/error':<32}" + "".join(f"  {np.nanmean(ra[:, a - 1]):.3f}" for a in show))
     if Q:
         lines += ["", "ENSEMBLE vs REFERENCE (same seeds, same launches). mean = ensemble mean; ref = --ref runs.",
                   "  spread/error ~1 = honest uncertainty; member amp ~1 = each member is a realistic trajectory", ""]
@@ -294,9 +334,9 @@ def main() -> None:
             lines.append(f"  hidden {fam} modes corr model/ref" + "".join(f" h{a}:{mp[a - 1]:.2f}/{mq[a - 1]:.2f}" for a in show))
     txt = "\n".join(lines)
     print(txt)
-    open(os.path.join(args.out, "summary.txt"), "w").write(txt + "\n")
-    json.dump([{k: (v.tolist() if isinstance(v, np.ndarray) else v) for k, v in r.items() if k not in ("z", "zhat", "ens_ex", "L")}
-               for r in R], open(os.path.join(args.out, "results.json"), "w"))
+    open(os.path.join(out_dir, "summary.txt"), "w").write(txt + "\n")
+    json.dump([{k: (v.tolist() if isinstance(v, np.ndarray) else v) for k, v in r.items() if k not in ("z", "zhat", "ens_ex", "L", "sp16", "er16")}
+               for r in R], open(os.path.join(out_dir, "results.json"), "w"))
 
     # ------------------------------ figure ------------------------------------------------------
     # Read top to bottom: (1) how big is the error, against the two "no-skill" references;
@@ -374,13 +414,13 @@ def main() -> None:
     ax.legend(fontsize=7)
     fig.suptitle(f"History forecaster — validation set [{r0['t_tr']},{r0['T']}), never seen in training; "
                  f"{len(R)} seeds x {r0['n_launch']} forecasts (band = seed range)", fontsize=13)
-    out = os.path.join(args.out, "hf_eval.png")
+    out = os.path.join(out_dir, "hf_eval.png")
     fig.savefig(out, dpi=110, bbox_inches="tight")
     print(f"[eval] wrote {out}")
     if Q and R[0]["is_ens"]:
-        ens_figure(R, Q, os.path.join(args.out, "hf_ens.png"))
+        ens_figure(R, Q, os.path.join(out_dir, "hf_ens.png"))
     if R[0]["is_ens"]:
-        fan_figure(R, os.path.join(args.out, "hf_fan.png"))
+        fan_figure(R, os.path.join(out_dir, "hf_fan.png"))
 
 
 def fan_figure(R: list, out: str) -> None:
@@ -466,6 +506,31 @@ def fan_figure(R: list, out: str) -> None:
         ax.set_ylabel(ylab)
         ax.set_xlim(1, A)
         ax.set_ylim(bottom=0)
+        ax.legend(fontsize=8, loc="upper left")
+    # 4th panel (D-042): is the fan wide WHEN the forecast is bad? Launches of each family (all seeds, every channel)
+    # binned by their own member spread at lead 16; per bin, mean spread vs RMS error. On the diagonal = the width of
+    # each single launch's fan is honest, so the uncertainty follows the situation, not only the family.
+    if r0.get("sp16") is not None:
+        ax = fig.add_subplot(gs[1, 3])
+        for fam in FAMS:
+            sp = [r["sp16"][:, fam_ch(r, fam)].ravel() for r in R if fam_ch(r, fam)]
+            if not sp:
+                continue
+            sp = np.concatenate(sp) * 100
+            er = np.concatenate([r["er16"][:, fam_ch(r, fam)].ravel() for r in R if fam_ch(r, fam)]) * 100
+            q = np.quantile(sp, np.linspace(0, 1, 11))
+            b = np.clip(np.searchsorted(q, sp, side="right") - 1, 0, 9)
+            xs = np.array([sp[b == i].mean() for i in range(10)])
+            ys = np.array([np.sqrt((er[b == i] ** 2).mean()) for i in range(10)])
+            rho = np.corrcoef(np.argsort(np.argsort(sp)), np.argsort(np.argsort(er)))[0, 1]
+            ax.plot(xs, ys, "o-", color=COL[fam], lw=1.8, ms=4, label=f"{fam} (rank corr {rho:+.2f})")
+        lim = ax.get_xlim()[1], ax.get_ylim()[1]
+        ax.plot([1e-2, max(lim)], [1e-2, max(lim)], "k:", lw=0.8)
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        ax.set_title("lead 16, per launch: spread vs error (deciles of spread)", fontsize=11)
+        ax.set_xlabel("member spread of the launch, % of signal size")
+        ax.set_ylabel("RMS error of the ensemble mean, % of size")
         ax.legend(fontsize=8, loc="upper left")
     fig.suptitle(f"Ensembles of every family in ONE unit (deviation from the level, % of signal size) — "
                  f"validation [{r0['t_tr']},{r0['T']}), {len(R)} seeds", fontsize=13)

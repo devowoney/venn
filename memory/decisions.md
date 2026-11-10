@@ -1170,6 +1170,49 @@ structure. Adapt hippocampus to new configuration and test it." Numbered after t
 - Flags `hf.channels: auto|live|all` and `hf.family_source: auto|observer|labeller`; `auto` = layered artifacts ->
   live + observer, single-layer artifacts -> all + labeller (old runs reproduce unchanged).
 
+## D-042 — LEARNED scenarios: every member is one coherent rollout, its width is learned (no imposed spread)
+
+**Date:** 2026-11-04. **Source:** user "the previous multi-scenario spread is just to see whether it looks nice. Now it
+is time to implement real uncertainty in highly-compressed space. I want a forecaster which makes (learned to be)
+multi-scenarios for one initial condition for one rollout. The uncertainty varies for its variability. Stationary and
+cyclic have small uncertainty and chaotic signal should have bigger uncertainty." SOP 04 "Learned scenarios".
+
+What was wrong with the F-27 / D-041 setting (measured 2026-11-04, `.tmps/eval_hf/learned_unc/`):
+- The fan width was IMPOSED: after training, each channel's spread was rescaled to its held-out RMSE (certainty score).
+- The members were not trajectories: fair CRPS scores every lead on its own, so nothing asks a member to move from
+  lead to lead like the system moves. Chaotic member step / true step = 1.66 raw, 2.90 after the score inflation
+  (spikes to -400 % of size in `hf_fan.png`); cyclic 1.05.
+- The learned (raw) width was already family-ordered (h8 std units: cyclic 0.10, noise 0.15, chaotic 0.30) and honest to
+  h4 (spread/error 0.9-1.0), under-dispersed beyond (0.6-0.8 at h16-h64).
+- Re-learning the generator on the held-out slice instead (trunk frozen) is REJECTED: 250 held-out steps are learned by
+  heart, validation RMSE got worse (chaotic h64 0.85 -> 1.21) and the spread collapsed (ratio 0.11 at h64).
+
+Decision (this step):
+1. Scenarios on EVERY channel, no family mask, no post-hoc spread factor (`families: all`, `calibrate: false`): the
+   width each channel and each launch gets is what the network learned from the history; family enters nowhere.
+2. Members must be rollouts: a second fair-CRPS term on each member's LEAD-TO-LEAD STEP (`x_a - x_{a-1}`, `x_0` = the
+   initial condition), weight `hf.ensemble.lambda_step` (1.0 in this step; 0 = old loss). A jagged member pays for
+   steps the system never takes; a member that moves like the system is free.
+3. Readout adds member roughness (member step / true step, 1 = moves like the system).
+Not in this step: the long-lead under-dispersion (a generalization gap that only held-out data can measure); judged
+after the figures.
+
+## D-043 — Spread from HESSIAN (B-norm) SINGULAR VECTORS of the latent emulator: initial-condition uncertainty, rollout members
+
+**Date:** 2026-11-05. **Source:** user idea "the hippocampus = forecaster is a differentiable latent-space emulator; get
+the sensitivity (adjoint) and generate the spread with it", refined and confirmed question by question; full record
+`memory/hsv_spread_design.md`. SOP 04 "Spread from Hessian singular vectors". Supersedes D-042's learned generator as the
+spread mechanism under study (D-042 runs kept as the reference).
+
+- Uncertainty represented: the START only (Q1 a). Forecaster error ε (Q_z) is excluded in this step.
+- B on the RAW field, used through the linear observer: B_z = E B_x Eᵀ (Q2). Prior B_x only in this step; the
+  loss-adjoint 4D-Var refinement (increments + Desroziers) is the next step.
+- No observation term at the start: A_z = B_z (Q3+Q4), i.e. B-norm singular vectors.
+- Dynamics = a deterministic twin forecaster (Q6a). Members and the tangent-linear model are ROLLOUTS of its lead-1 step
+  (Q5a, one-seed check first); a* = 16 (Q5b); final norm = latent std units (Q5c).
+- Members: n = 8 SVs, δ_m = α Σ ξ_{m,i} v_i, ± pairs, 32 members, one α by CRPS on held-out [7750, 8000) (Q6b).
+- Readout = F-37 readout + growth spectrum, family loading of the SVs, error projection on the evolved SVs (Q7).
+
 ## Numbering collisions with the encoder track
 
 The module-2 (`latent-predictor`) branch and the parallel `stationary-observer` (encoder) session both
@@ -2633,6 +2676,57 @@ Unchanged: z-scoring per channel with fitting-range stats (2026-10-01 ruling), s
 (D-033), the F-27 ensemble setting (`families: all`, `spread_from: score`, `t_tr=8000`, `t_fit=7750`).
 Comparison with the single-layer observer: per-channel RMSE is NOT comparable across observers (different channels);
 the comparable numbers are the **hidden-mode readout** (same field, same seeds) and the per-family RMSE in % of size.
+
+#### Learned scenarios (D-042, user 2026-11-04: "multi-scenarios for one initial condition for one rollout; the uncertainty varies with the variability")
+
+The uncertainty must be LEARNED, not imposed: no family mask, no certainty score, no spread factor. And each member is
+one possible rollout from the initial condition, not noise around the mean.
+
+```
+member_m = base + g(h_t, eps_m)                    every channel (families: all), spread buffer = 1 (calibrate: false)
+x_0 = z_t (the initial condition), x_a = member_m at lead a
+loss = fairCRPS(x_a ; z_{t+a})                     marginal: right place, right width        (lambda_crps)
+     + lambda_step * fairCRPS(x_a - x_{a-1} ; z_{t+a} - z_{t+a-1})   rollout: right MOVES       (lambda_step)
+```
+
+- Why the step term: CRPS per lead is a marginal score — a member that jumps between unrelated values at every lead
+  scores as well as a smooth one. The step term is the same proper score on the increments, so a member must also
+  move like the truth moves (a white-ish stationary leak may stay white; a chaotic member may not spike).
+- Same (position, lead) mask as the marginal term (lead a valid => lead a-1 valid). The initial condition is the clean
+  observed state, also with `input_noise > 0`.
+- `lambda_step: 0` (default) = the F-27 loss exactly. The D-042 recipe: `families=all calibrate=false lambda_step=1`.
+- Readout: roughness = RMS member step / RMS true step over the 64 leads, per family (1 = moves like the system).
+
+#### Spread from Hessian singular vectors (D-043, user 2026-11-05; design record `memory/hsv_spread_design.md`)
+
+The spread comes from the emulator's own sensitivity: likely start errors (B) that grow fastest (tangent-linear),
+propagated by the full nonlinear emulator. No noise generator, no learned width; one fitted size α.
+
+```
+E      : observer = live layer-2 masks, z units: E_z = diag(1/sd) · masks   (z = E_z x + c, exact, S = <mask, field>)
+B_x    : prior raw-field background error, Σ C Σ (rule, never an N×N matrix); B_z = E_z B_x E_zᵀ  [K×K]
+         from the SMOOTH part of the 1-step field change Δx (training slice): C(r) = exp(−r²/2ℓ²) fitted on r ≥ 1,
+         σ_v²(cell) = var(Δx_v) − nugget_v (white generator noise removed, Hollingsworth–Lönnberg), ℓ shared
+         then each eye's SIZE is set to its measured smooth 1-step change (var(Δz_i) − (E·nugget·Eᵀ)_ii, ≥ 0):
+         B_z ← D B_z D, D_ii = sqrt(measured_ii / rule_ii). The rule keeps the CORRELATIONS. Why: layer 2 shaped
+         stationary children so the movement cancels inside the mask; the distance rule cannot know (user, (a))
+A_z    : = B_z (no observation at the start; B-norm singular vectors)
+F      : deterministic twin forecaster; CHUNKED ROLLOUT, chunk 16: perturb z_t, take direct leads 1-16, append them
+         to the history as if observed, ask again at the 16th (feedbacks at 16, 32, 48). Pure rollout (chunk 1)
+         rejected by the one-seed check: unstable in every family
+L_a*   : ∂ rollout_{a*} / ∂ z_t, exact via K forward-mode JVPs, a* = 16
+SVD    : L_a* B_z^{1/2} = U Σ Vᵀ ;  v_i = B_z^{1/2} V_i (v_iᵀ B_z⁻¹ v_i = 1), i = 1..8
+member : δ_m = α Σ_i ξ_{m,i} v_i , ξ ~ N(0,1), ± pairs, 32 members; member = rollout from z_t + δ_m to lead 64
+α      : one scalar, min fair CRPS on launches with targets in the held-out [7750, 8000)
+```
+
+- Rollout with a key/value cache: one shared causal pass stores every layer's keys/values; a rolled step is one new
+  token attending to positions ≤ t−1 plus the launch token and earlier rolled tokens. Exactness check: teacher-forced
+  (true states fed back) must reproduce the full causal pass.
+- One-seed check BEFORE the members (shown to the user): rollout vs direct RMSE by lead/family; growth of a small
+  start perturbation under rollout vs direct. Fallback if the rollout drifts: chunked rollout (direct heads in blocks).
+- Field rebuilt from the observer run's own `.hydra` config (`generate_field` + `normalize_input`); check
+  `max|S − S_art| / std(S)` ≈ 1e-5.
 
 ## SOP 05 — Frontal Decoder (module 3, "frontal cortex")
 

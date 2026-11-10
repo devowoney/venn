@@ -2026,3 +2026,36 @@ the end point of the hippocampus forecaster." -> Summing children into parents w
 a requirement. Judged at the endpoint (per family, % of size, spread/error, causality) the layered history forecasts well
 (F-35). The hidden-mode drop at h8-h16 is an answer-key readout, a question for module 3 if anywhere. Proposed: accept
 D-041 as the module-2 setting; capacity / parent-target tests not pursued unless the user asks.
+
+#### 2026-11-04 — LEARNED scenarios (D-042, F-37), branch `history-forecastor`
+
+User: "the previous multi-scenario spread is just to see whether it looks nice ... a forecaster which makes (learned
+to be) multi-scenarios for one initial condition for one rollout; the uncertainty varies with its variability."
+- Diagnosis (`.tmps/eval_hf/learned_unc/`): the F-27/D-041 fan width was imposed (certainty score); members were not
+  rollouts (chaotic member step 1.66x the true step raw, 2.90x inflated); the raw learned width was already
+  family-ordered, honest to h4, 0.6-0.8 beyond.
+- Rejected prototype: re-learn the generator on the held-out [7750,8000) with the trunk frozen -> memorized the
+  slice (validation chaotic RMSE h64 0.85 -> 1.21, spread/error 0.11).
+- Built: `hf.ensemble.lambda_step` (fair CRPS on each member's lead-to-lead step) in the trainer; roughness, a
+  SCENARIOS block and a per-launch spread-vs-error panel in the eval probe. Records first: D-042 + SOP 04 subsection.
+- First 5-seed launch was killed after ~15 min (session interrupted); relaunched with unbuffered logs.
+- Result F-37: roughness ~1, learned width family-ordered and launch-dependent, accuracy unchanged, still
+  under-dispersed beyond h4. No commits (user handles git). Config default unchanged (`lambda_step: 0`, ensemble off);
+  the recipe lives in `launch_learned.sh`.
+- Next, for the user: accept as the module-2 setting, and/or attack the long-lead under-dispersion.
+
+#### 2026-11-04/05 — Adjoint-sensitivity (HSV) spread: design discussion
+
+User idea: generate the forecaster's spread from the adjoint sensitivity of the differentiable latent emulator, then
+(later) bridge to online DA. Refined over the discussion into: B on the raw field projected through the linear
+observer (B_z = E B_x Eᵀ), Hessian singular vectors at the last state z_t, members = nonlinear rollouts. Full record,
+DA theory (Part B) and the question-by-question confirmation table: `memory/hsv_spread_design.md`. First objective:
+HSV spread on the latent forecaster; nothing implemented yet (questions Q1-Q7 open).
+
+#### 2026-11-05 → 11-10 — HSV spread built and run (D-043, F-38)
+- Q1-Q7 confirmed one by one (record `memory/hsv_spread_design.md`); amendments: chunk-16 rollout (pure rollout
+  unstable, one-seed check), B_x from the noise-free smooth 1-step change, each eye's size measured (B-fix a: the
+  distance rule gave stationary children large start errors their masks cancel).
+- Built: twin `twin_seed*`, `src/models/hsv_spread.py`, `src/probes/hsv_rollout_check.py`, `src/probes/eval_hsv_spread.py`,
+  `eval_one(..., ensemble_fn)` + `report()` in the eval probe. Result F-38. No commits (user handles git).
+- Next, for the user: emulator error (Q1 b) and/or the 4D-Var refinement of B (2b).
