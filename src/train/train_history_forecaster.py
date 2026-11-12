@@ -57,15 +57,21 @@ def history_channels(art, t_fit: int, channels: str = "auto", family_source: str
     return keep, fam
 
 
-def lead_mask(t0: int, T: int, t_fit: int, leads: int, min_sight: int, device) -> torch.Tensor:
+def lead_mask(t0: int, T: int, t_fit: int, leads: int, min_sight: int, device, holdout=None) -> torch.Tensor:
     """[T,A] bool: which (position, lead) pairs enter the loss for a sequence starting at absolute time t0.
 
     Position j (absolute time t0+j) counts only once it has >= min_sight steps of history, and lead a only if
     its target t0+j+a is still inside the fitting range (< t_fit): no target from outside the training data.
+    holdout = (a, b) (D-045 cross-fitting): no target in [a, b + leads) is fitted either, so every forecast launched
+    inside the block -- whose targets run up to `leads` steps past b -- is out-of-fold. The block is still READ as history.
     """
     j = torch.arange(T, device=device)[:, None]
     a = torch.arange(1, leads + 1, device=device)[None, :]
-    return (j >= min_sight) & (t0 + j + a < t_fit)
+    m = (j >= min_sight) & (t0 + j + a < t_fit)
+    if holdout is not None:
+        tgt = t0 + j + a
+        m = m & ((tgt < int(holdout[0])) | (tgt >= int(holdout[1]) + leads))
+    return m
 
 
 def fair_crps(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
@@ -83,7 +89,8 @@ def fair_crps(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
 
 
 def forecast_loss(model: HistoryForecaster, z: torch.Tensor, t0: int, t_fit: int, min_sight: int,
-                  members: int = 0, lambda_crps: float = 1.0, input_noise: float = 0.0, lambda_step: float = 0.0):
+                  members: int = 0, lambda_crps: float = 1.0, input_noise: float = 0.0, lambda_step: float = 0.0,
+                  holdout=None):
     """Loss of one history z [1,T,K] over all valid (position, lead).
 
     Deterministic model (members = 0): mean squared error on every channel.
@@ -99,7 +106,7 @@ def forecast_loss(model: HistoryForecaster, z: torch.Tensor, t0: int, t_fit: int
     # target of (position j, lead a) = z[j+a]; build it by shifting, padding past the end (masked out anyway)
     pad = torch.cat([z, z[:, -1:].expand(1, A, -1)], dim=1)            # [1,T+A,K]
     tgt = torch.stack([pad[:, a:a + T] for a in range(1, A + 1)], dim=2)   # [1,T,A,K]
-    m = lead_mask(t0, T, t_fit, A, min_sight, z.device)[None, :, :, None].float()   # [1,T,A,1]
+    m = lead_mask(t0, T, t_fit, A, min_sight, z.device, holdout)[None, :, :, None].float()   # [1,T,A,1]
     if members == 0:
         err = ((model(z_in) - tgt) ** 2) * m
         return err.sum() / (m.sum() * z.shape[-1]).clamp_min(1.0)
@@ -207,6 +214,9 @@ def main(cfg: DictConfig) -> None:
     z_all = torch.tensor((S - mu) / sd, dtype=torch.float32, device=device)
     z_fit = z_all[:t_fit]                                              # the only data that trains
     print(f"[hf] encoder={run} S={S.shape} fit=[0,{t_fit}) train=[0,{t_tr}) validation=[{t_tr},{T_all})")
+    holdout = hf.get("holdout", None)                                  # D-045 cross-fitting fold, targets left out
+    if holdout is not None:
+        print(f"[hf] holdout: no target in [{int(holdout[0])},{int(holdout[1]) + int(hf.leads)}) is fitted")
 
     ens_cfg = hf.get("ensemble", None)
     use_ens = bool(ens_cfg is not None and ens_cfg.enable)
@@ -244,7 +254,7 @@ def main(cfg: DictConfig) -> None:
         # B long histories z[s0 : t_fit] with random start: varied lengths, all ending at the fit boundary
         for s0 in torch.randint(0, int(hf.max_start), (int(hf.batch),), generator=g).tolist():
             loss = loss + forecast_loss(model, z_fit[None, s0:], s0, t_fit, int(hf.min_sight), members, lam,
-                                        float(hf.get("input_noise", 0.0)), lam_step)
+                                        float(hf.get("input_noise", 0.0)), lam_step, holdout)
         loss = loss / int(hf.batch)
         opt.zero_grad()
         loss.backward()

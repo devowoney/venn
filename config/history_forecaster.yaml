@@ -36,6 +36,8 @@ hf:
   batch: 4              # full-history sequences per step
   max_start: 500        # each sequence = z[s0 : t_fit], s0 ~ U[0, max_start): varied, always long, histories
   min_sight: 32         # positions with less history than this are left out of the loss
+  holdout: null         # [a, b]: cross-fitting fold (D-045) -- no target in [a, b + leads) is fitted; the block is
+                        # still read as history. null = fit every target in [0, t_fit)
   input_noise: 0.0      # std (training-std units) of noise added to the history the model READS in training;
                         # targets stay clean. Anti-memorization knob. 0 = off (F-21 setting)
   eval_every: 250       # log the development / training-tail loss to TensorBoard

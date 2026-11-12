@@ -1238,6 +1238,80 @@ against HSV.
   code as an experiment (calibrated fans, but rougher members, chaotic joint NLL −0.94 vs −1.19, cyclic h64 mean 7.4 vs
   5.2 %).
 
+## D-045 — PRIOR-CENTRED FLOW on the attention forecaster; trained on CROSS-FITTED (out-of-fold) predictions
+
+**Date:** 2026-11-12. **Source:** user hypotheses H1-H3 and refinement, design record
+`memory/conditional_forecast_design.md` (§3-5); T1 = F-41; user "yes" to cross-fitting (2026-11-12). Goal: estimate
+p(x_{t+1:t+l} | z_{t-k:t}) with a physical distribution and probability. Flow matching of D-044 is not the basis here.
+
+- The attention forecaster's prediction F(Z) is the PRIOR and the high-probability point (checked: per-eye errors are
+  never bimodal). The flow's source is a Gaussian CENTRED ON THE PREDICTION, x0 = F(Z) + Σ^{1/2} ε; its target is the
+  real future window; the flow learns only how the future departs from the prediction (no spread target).
+- A flow window may span several real steps (user: "not necessarily one time step"); window length = open question.
+- **Cross-fitting (this decision):** the flow learns ONLY from predictions made on data the predictor never fitted.
+  Why: the twin's validation RMSE is up to 1.96x its training RMSE (chaotic h16; lead 1 only 1.02), so in-sample
+  residuals would make the flow ~2x too narrow (F-37 again).
+  - 4 contiguous folds of [0, 8000): [0,2000), [2000,4000), [4000,6000), [6000,8000). Fold model k = the twin recipe
+    (D-043 Q6a: deterministic, MSE) fitted on [0, 8000) with every TARGET in [a_k, b_k + A) left out of the loss
+    (`hf.holdout: [a_k, b_k]`; the purge + A = 64 covers the out-of-fold launches' targets that run past b_k).
+    Histories still READ through the held-out block (inputs, never targets).
+  - Out-of-fold launches t in [a_k - 1, b_k - 1) are forecast by fold model k -> ~8000 (history, prediction, truth)
+    triples for the flow. Validation [8000, 10000) is forecast by the full twin (fit [0,7750)), never seen by any part.
+  - Runs `.tmps/runs_hf/fold{k}_seed{s}`, k = 0..3, s = 0..4.
+- **Window (user 2026-11-12): (a) ONE 64-lead window, no chaining** -- "let's see what it gives".
+- Build (assistant defaults, step 1): `src/models/prior_flow.py` PriorFlow, `src/train/train_prior_flow.py`,
+  `config/prior_flow.yaml`, `src/probes/eval_prior_flow.py`. Departure r = (z − F(Z)) / σ, σ[a,k] = RMS out-of-fold
+  departure on the training launches; source N(0, I) (= Gaussian prior N(F(Z), diag σ²)). Velocity net: history of ALL
+  eyes (256 steps, patches of 8) encoded once, re-read by cross-attention; 16 future tokens of 4 leads x K eyes
+  carrying [r_τ, F(Z) − z_t]; d 128, 3+3 layers, 1.6 M params; one flow per observer seed. Model selection on
+  out-of-fold launches with targets in [7500, 8000); training launches end their targets before 7500.
+  Readout: standard ensemble readout + exact log p(true 64x K future) vs the Gaussian prior + rank histograms.
+- **Step 2 (user 2026-11-12 "ok", after F-42): JOINT Gaussian source** (`pf.source: joint`, config default). The flow
+  runs on the whitened departure u = chol⁻¹ r, chol = Cholesky of the correlation of the σ-standardized out-of-fold
+  departures over all 64 leads x K eyes, shrunk (1-λ) C + λ I with λ = the most probable on the held-out launches
+  (grid 1e-4..0.3). N(0, I) in u = N(F(Z), σ C σ). Lead-major order makes chol causal in lead: u at lead a = what is
+  new at lead a given the earlier leads (Gaussian innovations in time, H2). Runs `.tmps/runs_pf/pfj_seed{0..4}`, eval
+  `.tmps/eval_pf/pfj/`. Step-1 runs (`pf_seed*`, diag source) kept as recorded in F-42.
+
+## D-046 — H4 attention-MASK scenarios: a twin trained with random block masks; scenarios = which past blocks it may attend to
+
+**Date:** 2026-11-12. **Source:** user H4 ("multi prediction from multi scenario of attention, then noising to find the
+most likely prediction"), after F-44 (sight-length scenarios are a nested quality ladder): "go with attention-mask
+scenarios to see". User note: a narrow latent spread is acceptable in principle (compressed signal; one small latent
+error can stand for a large raw spread) -- assistant caveat recorded: with the linear decoder the latent spread/error
+ratio carries to the seen part of the field unchanged; extra raw spread lives in the unseen part (x^perp lift).
+Design record `memory/conditional_forecast_design.md` §9-10.
+
+- **Mask twin** = the deterministic twin recipe (D-043 Q6a, fit [0,7750)) trained with RANDOM BLOCK MASKS on the
+  attention: absolute time cut into blocks of `mask_block` = 256 steps; per training sequence each block is hidden with
+  probability p ~ U[0, `mask_pmax` = 0.9]; a query always sees its own last `mask_recent` = 64 steps. Applied as an
+  attention mask in every layer (a hidden step's own token still exists, nobody else reads it). Why: a twin trained
+  with full sight only has never seen a history with holes, so masked forecasts would be out-of-distribution.
+- **Scenarios at validation** (window = the last 2048 steps, F-44: longer histories are out of range; 8 blocks of 256,
+  last 64 steps always seen): (i) reference = the whole window; (ii) LEAVE-ONE-OUT: block j hidden (8 scenarios);
+  (iii) SINGLE: only block j seen (8 scenarios) -- non-nested, each scenario attends to different evidence.
+- Readout = the F-44 readout per scenario set (accuracy per scenario, spread/error, rank of the truth, per-launch
+  spread vs error, fans) + accuracy of the mask twin's whole-window forecast vs the twin (does mask training cost
+  accuracy?). Noising (H4 step 2) only after the user has seen this.
+- Runs `.tmps/runs_hf/mask_seed{0..4}`; probe `src/probes/mask_scenarios.py`; eval `.tmps/eval_hf/mask/`.
+
+## D-047 — The MASK TWIN is accepted as the SPREAD mechanism under study (H4), not as the default predictor
+
+**Date:** 2026-11-12. **Source:** user "Accept the mask twin" after F-45, then the correction "Wait. The applied masked
+block attention is to make a nicer spread." (The assistant first recorded it as module 2's default deterministic
+predictor and set `hf.mask.enable: true` as the config default; both undone the same day.)
+
+- Purpose of the mask twin = make the spread (H4: several attention scenarios -> several predictions -> noising finds
+  the most likely one). Runs `.tmps/runs_hf/mask_seed{0..4}`; `hf.mask.enable` stays `false` by default and is set
+  explicitly for mask runs.
+- State (F-45): its scenarios collapse on this testbed (spread/error 0.01-0.12) -- the spread is not nice yet. Side
+  facts kept for later: mask training improves long leads a little (cyclic h64 7.18 vs 7.71, chaotic h64 41.5 vs 42.7);
+  forecast from the last 2048 steps (F-44).
+- Next: how to make the mask scenarios spread -- user decides.
+- **CLOSED (2026-11-12):** superseded by H5 (deterministic twin + Gaussian latent error + flow-matching decoder,
+  `memory/conditional_forecast_design.md` §11). The mask code and the `mask_seed*` runs were removed in the worktree
+  cleanup (design record §12). The current forecaster is the PLAIN deterministic twin (D-043 Q6a, `twin_seed{0..4}`).
+
 ## Numbering collisions with the encoder track
 
 The module-2 (`latent-predictor`) branch and the parallel `stationary-observer` (encoder) session both

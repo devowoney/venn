@@ -1665,3 +1665,148 @@ chaotic, 23 noise). Eval `.tmps/eval_ef/flowsc/` and `.tmps/eval_ef/flow/` (`sum
    g_a (up to 17) on the way back, which adds lead-to-lead jitter; the truth is smooth, so the JOINT density drops
    although each lead's marginal is better calibrated.
 4. Remaining: chaotic and noise slightly too narrow in the tails at h64 (rank 0 / 32 bins ~1.2-1.3).
+
+---
+
+### F-41. The twin's one-step error is Gaussian, joint across eyes (~10 noises), and two noises in one: white observation noise + propagating error amplified on chaotic eyes (T1, 2026-11-12)
+
+Probe `src/probes/one_step_residual.py` on `twin_seed{0..4}`, validation -> `.tmps/eval_hf/one_step/` (`summary.txt`,
+`one_step.png`). Test of the user's H2 (compressed uncertainty = Gaussian noise per real step), design record
+`memory/conditional_forecast_design.md`. Medians over eyes (5 seeds):
+
+| family | lead-1 RMS % size | error / true step | acf lag 1 | excess kurtosis | mse(a)/(a mse1) h4/h16/h64 |
+|---|---|---|---|---|---|
+| stationary | 0.30 | 0.71 | -0.04 | -0.02 | 0.25/0.07/0.02 |
+| cyclic | 2.54 | 0.69 | -0.31 | -0.01 | 0.36/0.39/0.15 |
+| chaotic | 2.74 | 0.32 | -0.06 | +0.12 | 1.83/4.55/2.30 |
+| noise | 2.13 | 0.72 | -0.30 | +0.01 | 0.42/0.51/0.28 |
+
+1. Gaussian in every family. 2. Stationary error = non-propagating white noise (flat in lead). 3. Cyclic/noise lag-1
+-0.3 = white observation noise on the reported state. 4. Chaotic error grows ~4.5x beyond a random walk by h16. 5.
+Participation ratio 9.6-13.3 for K = 38-52: the error lives in ~10 joint directions. 6. |error| lag-1 +0.10-0.13: mild
+state-dependent size. Reading: H2 holds at one step as a STATE-SPACE model (process noise that propagates + white
+observation noise that does not), joint across eyes.
+
+---
+
+### F-42. Prior-centred flow, step 1 (one 64-lead window, diagonal Gaussian start): cross-fitting works; the flow is ~15 % too narrow, has rough members, and a plain JOINT Gaussian of the out-of-fold errors beats it in probability (D-045, 2026-11-12)
+
+Runs: fold models `.tmps/runs_hf/fold{0..3}_seed{0..4}` (`launch_folds.sh`), flows `.tmps/runs_pf/pf_seed{0..4}`
+(`launch_pf.sh`); eval `.tmps/eval_pf/pf/` (`summary.txt`, `flow_summary.txt`, `hf_fan.png`, `hf_eval.png`,
+`flow_prob.png`). Validation [8000,10000), 1937 launches/seed, 32 members. Best held-out checkpoints at steps
+1500-6500 of 20000 (held-out loss stops improving early).
+
+1. **Cross-fitting closes the generalization gap:** validation RMSE of the full twin / out-of-fold RMSE of the fold
+   models, h1/h4/h8/h16/h32/h64: stationary 1.03/1.02/1.00/1.00/0.99/1.00, cyclic 1.00/0.98/0.97/0.97/0.94/0.93,
+   chaotic 0.97/0.89/0.85/0.90/0.90/0.93, noise 1.00/0.97/0.93/0.94/0.93/0.94 (in-sample was up to 1.96). The
+   Gaussian prior N(F(Z), diag σ²) built from it is honest: spread/error 0.98-1.19 in every family and lead.
+2. **The flow, % of signal size, h1/h4/h8/h16/h64:**
+
+| family | spread | RMSE of the members' mean | spread/error | roughness |
+|---|---|---|---|---|
+| stationary | 0.4/0.4/0.5/0.5/0.5 | 0.4/0.4/0.4/0.4/0.4 | 1.05/1.06/1.11/1.11/1.12 | 1.21 |
+| cyclic | 2.6/3.3/4.5/6.1/7.6 | 3.0/3.9/5.2/7.2/8.8 | 0.85/0.84/0.86/0.86/0.89 | 1.49 |
+| chaotic | 2.9/8.8/20.1/28.0/37.4 | 3.5/10.2/20.8/29.6/44.1 | 0.80/0.83/0.93/0.91/0.85 | 2.58 |
+| noise | 2.0/2.7/5.1/7.1/11.0 | 2.4/3.3/5.5/8.2/13.3 | 0.84/0.81/0.89/0.86/0.84 | 2.19 |
+
+   The flow SHRINKS the honest prior by ~15 % (U-shaped rank histograms at h1/h16/h64), members are jagged (chaotic
+   members step 2.6x the system), the members' mean ≈ the twin (chaotic h16 29.6 vs 28.8). Per launch, wider fan <->
+   larger error (h16 rank corr stationary +0.42, cyclic +0.51, chaotic +0.49, noise +0.32). Causality 0.
+3. **Probability of the true 64-lead future (nats per number, every 8th validation launch), seeds 0-4:**
+   diagonal Gaussian prior -0.28/-0.59/-0.18/-0.40/-0.16; flow +1.18/+0.77/+1.17/+1.02/+1.04; JOINT Gaussian
+   N(F(Z), Σ), Σ = covariance of the out-of-fold departures over all 64 leads x K eyes (shrinkage to the diagonal
+   chosen on held-out, λ = 0.01, edge of the grid) +1.41/+1.06/+1.47/+1.44/+1.23 (script `joint_gauss.py` in the job
+   tmp, not kept). The flow's whole gain over the diagonal prior is CORRELATION across leads and eyes, and it captures
+   less of it than a static joint Gaussian; no non-Gaussian gain is shown.
+4. Reading: a ~2000-2700-dim joint target learned from ~7000 heavily overlapping launches per seed -> the flow
+   underfits the joint structure (held-out stops improving early), and the imperfect velocity regression contracts
+   the samples.
+
+---
+
+### F-43. Prior-centred flow, step 2 (JOINT Gaussian source): members become coherent, but the joint Gaussian ALONE stays the best distribution; the flow shrinks it ~15 % and lowers log p on every launch (D-045 step 2, 2026-11-12)
+
+Runs `.tmps/runs_pf/pfj_seed{0..4}` (`launch_pf_joint.sh`), eval `.tmps/eval_pf/pfj/` (`summary.txt`,
+`flow_summary.txt`, `hf_fan.png`, `hf_eval.png`, `flow_prob.png`). Shrinkage λ 3e-4 (seeds 0/2/3) / 1e-3 (1/4);
+best held-out checkpoints at steps 1500-3500 of 20000. % of signal size, h1/h4/h8/h16/h64:
+
+| family | spread | RMSE of the members' mean | spread/error | roughness |
+|---|---|---|---|---|
+| stationary | 0.3/0.3/0.4/0.4/0.4 | 0.4/0.4/0.4/0.4/0.4 | 0.86/0.86/0.87/0.86/0.84 | 0.83 |
+| cyclic | 2.6/3.3/4.4/6.0/7.9 | 3.0/3.9/5.3/7.4/8.9 | 0.85/0.85/0.85/0.84/0.92 | 0.94 |
+| chaotic | 2.7/9.3/18.9/25.8/37.5 | 3.4/9.8/19.5/28.1/42.9 | 0.79/0.94/0.98/0.92/0.88 | 0.92 |
+| noise | 2.0/2.9/4.8/6.9/11.3 | 2.4/3.3/5.3/8.0/13.5 | 0.84/0.88/0.91/0.87/0.86 | 0.91 |
+
+1. **Coherent members:** roughness 0.83-0.94 (step 1: 1.21-2.58); the joint source alone 0.97-1.08.
+2. **The source alone is the honest one:** spread/error stationary 0.98-1.01, cyclic 0.99-1.10, chaotic 1.03-1.19,
+   noise 1.00-1.11. The flow shrinks it by ~15 % again (U-shaped rank histograms at h1 and h64; chaotic h16 mixed: a
+   hump in the middle plus too many truths below every member).
+3. **Probability of the true 64-lead future, nats per number, seeds 0-4:** joint source alone
+   +1.69/+1.26/+1.65/+1.79/+1.36; flow +1.57/+1.19/+1.52/+1.68/+1.24 -> the flow is LESS probable on 100 % of launches,
+   by a near-constant ~0.1 nats per number (points parallel to the diagonal in `flow_prob.png`): a uniform contraction,
+   not launch-specific information.
+4. Accuracy: members' mean chaotic h16/h64 28.1/42.9 (twin 28.8/44.1): a small gain. Per launch, wider fan <-> larger
+   error at h16: rank corr stationary +0.42, cyclic +0.53, chaotic +0.48, noise +0.32 (the source alone has the same
+   width at every launch).
+5. Reading: with ~7000 overlapping out-of-fold launches per seed, the departure from the twin's prediction is close to
+   ONE fixed joint Gaussian; the flow finds no learnable non-Gaussian structure that survives held-out, and its
+   imperfect (early-stopped) velocity contracts the samples. What it does carry is a per-launch width signal (point 4)
+   that a fixed Gaussian cannot have -- untested whether a cheaper model (state-dependent scale) gets it without the
+   contraction.
+
+---
+
+### F-44. H4 first measurement: scenarios from different SIGHT lengths of the twin are a quality ladder, not alternative futures — far too narrow; and the full history is out-of-distribution for cyclic/noise eyes (2026-11-12)
+
+Probe `src/probes/sight_scenarios.py` on `twin_seed{0..4}`, validation (1937 launches/seed) -> `.tmps/eval_hf/sight/`
+(`summary.txt`, `sight.png`, `sight_fan.png`). Scenario j = the twin reading only the last L_j steps,
+L ∈ {32, 48, 64, 96, 128, 192, 256, 512, 1024, 2048, full} (11 scenarios; every sight >= 32 was scored in training).
+User idea H4, design record `memory/conditional_forecast_design.md` §9.
+
+1. **Longer sight = better, almost monotonically** (RMSE % of size at h16, sight 32 -> 2048): stationary 0.44 -> 0.41,
+   cyclic 10.05 -> 5.98, chaotic 33.0 -> 28.2, noise 9.16 -> 6.62. The scenarios are nested views with less
+   information, not equally plausible alternatives.
+2. **The full history is worse than sight 2048 on cyclic and noise eyes** (cyclic h16/h32/h64 full 7.44/9.92/8.87 vs
+   2048 5.98/7.50/7.71; noise 7.13/9.99/12.25 vs 6.62/9.17/11.72; chaotic and stationary: full ≈ best). Validation
+   histories are 8000-10000 steps, longer than any training history (<= 7750): attention lags never trained.
+   (Bears on every module-2 run read with full sight, not only H4.)
+3. **Far too narrow:** scenario spread / error of their equal-weight mean, h1/h4/h8/h16/h32/h64: stationary
+   0.10/0.14/0.18/0.22/0.27/0.28, cyclic 0.16/0.37/0.51/0.64/0.76/0.67, chaotic 0.28/0.46/0.47/0.49/0.51/0.47, noise
+   0.15/0.36/0.46/0.54/0.62/0.58. Rank histograms: the truth lies outside all 11 scenarios most of the time (edge
+   bins 2.5-5x uniform).
+4. **Weak per-launch signal:** spread vs error at h16, median rank corr over eyes: chaotic +0.30, noise +0.13, cyclic
+   +0.04, stationary +0.01 (the prior-centred flow, F-43: +0.32..+0.53).
+5. Fans: scenarios of one launch are coherent, share the phase, differ mostly in amplitude; none reaches the large
+   chaotic extreme near step 8440.
+6. Accuracy of the scenarios' equal-weight mean ≈ the full-sight twin (chaotic h16 27.9 vs 27.6), better on cyclic
+   (6.19 vs 7.44, because of point 2).
+Reading: nested sight lengths share most of their information, so their disagreement measures "how much does extra
+history change the answer", not "which futures are possible". As the scenario set of H4 they cover at most ~half of
+the real error (chaotic) and carry little launch-specific signal.
+
+---
+
+### F-45. H4 attention-MASK scenarios collapse: any 256-step past block (+ the last 64 steps) gives nearly the same forecast as the whole window; mask training is a mild regularizer (D-046, 2026-11-12)
+
+Runs `.tmps/runs_hf/mask_seed{0..4}` (`launch_mask.sh`: twin recipe + random block masks), probe
+`src/probes/mask_scenarios.py` -> `.tmps/eval_hf/mask/` (`summary.txt`, `mask.png`, `mask_fan.png`). Validation, 1937
+launches/seed, window 2048 = 8 blocks of 256, last 64 steps always read. % of signal size, h1/h4/h8/h16/h32/h64.
+
+1. **Scenarios barely differ.** Spread / error of the 8 scenarios' mean: LOO stationary 0.01-0.02, cyclic 0.01-0.06,
+   chaotic 0.02-0.04, noise 0.01-0.05; SINGLE stationary 0.02-0.05, cyclic 0.03-0.12, chaotic 0.05-0.09, noise
+   0.02-0.11. The truth lies outside all 8 scenarios almost always (edge bins ~4x uniform). Per-launch spread vs error
+   at h16: chaotic +0.22/+0.23 (LOO/SINGLE), others <= +0.11.
+2. **One past block is (almost) as good as the whole window:** SINGLE best/worst at h16: cyclic 5.84/5.89 vs whole
+   5.91; chaotic 28.06/28.33 vs 27.74; noise 6.65/6.74 vs 6.59 (the plain twin with sight 64 had cyclic 7.93, F-44: the
+   long past does help, but ANY 256-step piece of it carries that help).
+3. **Mask training slightly improves the whole-window forecast** (mask vs plain twin, same 2048 window): cyclic
+   h32/h64 7.20/7.18 vs 7.50/7.71, chaotic h32/h64 36.01/41.47 vs 37.66/42.71, noise h64 11.21 vs 11.72; h1-h16 equal
+   within ~0.4 (chaotic h8 20.33 vs 19.28 is the one loss).
+4. Fans: all 16 scenarios lie on the whole-window forecast in every family; none reaches the chaotic extreme near 8440.
+Reading: on this testbed the past is REDUNDANT -- a stationary generator, so every 256-step piece holds the same
+information about the dynamics and the current state sits in the last 64 steps. The disagreement between attention
+scenarios measures what the evidence leaves undecided about the forecast (epistemic), which is ~0 here; the real error
+is what the history cannot tell (unpredictable chaos, noise), which no choice of attention can produce. For H4 on this
+testbed the noising step would have to supply ~all of the width -> it reduces to a Gaussian around ~one prediction
+(F-43). Attention scenarios could matter where the evidence is NOT redundant (non-stationary records, regime changes,
+rare events seen once).
