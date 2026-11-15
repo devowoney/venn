@@ -2103,3 +2103,10 @@ Leads 8/32/64 (user choice, F-51): the network beats the fixed Gaussian at every
 (cyclic growing with lead, chaotic shrinking), spread honest per launch at long leads. Next step for the user.
 Step B (user, D-053 / F-52): decoder on the network's p(z), leads 1 and 32. Lead 32: field CRPS 0.0681 -> 0.0601
 (-12 %), RMSE -5 %, spread-error corr +0.25 -> +0.58; lead 1 ~1 %. Per-cell over-dispersion remains. Next for the user.
+2026-11-15: user asked for an exaggerated prior "at least for test" (D-054, F-53): shapes reach the field, but field
+skill drops (lead 1 RMSE 0.0586 -> 0.1149; lead 32 CRPS 0.0601 -> 0.0672); noise-uniform costs most, cyclic skew often
+points the wrong way. Next for the user.
+Then (user) chaotic -> family-net plateau, noise -> family-net Gaussian: field back near the net prior (lead 32 CRPS
+0.0645 vs 0.0601), better calibrated (spread/RMSE 1.00); the noise uniform had been the damage.
+Retrained the decoder on the exaggerated prior (user, D-055 / F-54): lead 1 = net prior (CRPS 0.0316), lead 32 best so
+far (RMSE 0.2053, CRPS 0.0593, spread-error corr +0.63). Next for the user.

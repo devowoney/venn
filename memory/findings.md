@@ -1999,3 +1999,50 @@ changes (fixed Gaussian N(ẑ, Σ_a) vs the network). The linear decoder D(z~) +
   field p(x) at single cells -- at the widest cell the flow's members are centred on the truth (lead 1) or skewed with
   an eddy / no-eddy tail (lead 32), where the linear members are broad and off-centre; widest cell through 150 launches:
   truth inside flow 5-95 % 90 % (lead 32), 98 % (lead 1, too wide); at lead 32 the flow band there is near-climatological.
+
+### F-53. The exaggerated prior's shapes do reach the field, but every exaggeration costs skill; noise-uniform hurts most (D-054, 2026-11-15)
+
+Seed 0, validation, same decoders as F-52 (not retrained).
+
+| | latent CRPS (z), net -> exaggerated | field flow RMSE / CRPS, net -> exaggerated | linear RMSE |
+|---|---|---|---|
+| lead 1 | all 0.0879 -> 0.1414 (noise 0.022 -> 0.626, cyclic +45 %, stationary +9 %, chaotic =) | 0.0586 / 0.0317 -> **0.1149 / 0.0545** | 0.0619 -> 0.1273 |
+| lead 32 | all 0.2492 -> 0.2987 (noise 0.170 -> 0.626, cyclic +47 %, stationary +8 %) | 0.2066 / 0.0601 -> 0.2194 / 0.0672 | 0.2241 -> 0.2528 |
+
+- Lead 1 field RMSE doubles and passes persistence (0.1099); lead 32 loses ~11 % CRPS (still ~ the fixed-Gaussian
+  decoder's 0.0681). Latent shapes look as asked (latent.png): narrow stationary, skewed cyclic flipping at the crest,
+  flat noise over the whole range.
+- Cyclic skew is often the WRONG way: in the lead-32 launch, ch 0 and ch 4 put their mass ahead along s while the truth
+  sits behind, where the ramp has ~zero density. The sliding fit's direction of travel at the target is not a reliable
+  sign of where the truth goes (consistent with F-49/F-51: errors along s are symmetric).
+- The shapes DO pass through the decoder: at lead 1 the widest cell's flow p(x) gets a sharp edge and a one-sided tail;
+  the linear decoder turns the uniform noise draws into huge field swings (-4..2 at that cell), the flow far less.
+- Chaotic as the family network's own plateau density (user correction; first a hard window, then exactly the blue
+  family-net curve with soft edges and tails -- the exaggerated curve now lies on it) instead of the network Gaussian:
+  field scores unchanged in both versions (lead 1 flow 0.1149 / 0.0545; lead 32 0.2195 / 0.0672). The plateau is visible in the latent densities;
+  in the field the linear members inherit its hard edges (widest lead-32 cell bounded ~0..3), the flow smooths them
+  into tails and keeps the truth inside.
+- Noise back on its family shape (user, the family net's Gaussian; the rest unchanged: stationary 0.5 w, cyclic
+  ramp, chaotic family plateau): field flow RMSE / CRPS lead 1 0.0612 / 0.0327 (net prior 0.0586 / 0.0317), lead 32
+  0.2110 / 0.0645 (net 0.2066 / 0.0601; fixed Gaussian 0.0681). Spread/RMSE 1.09 (lead 1) and 1.00 (lead 32), better
+  calibrated than the net prior (1.15, 1.04); spread-error corr +0.20 / +0.60. So the noise uniform was the damage
+  (lead 1 RMSE doubled); what remains (+3 % / +7 % CRPS vs the net prior) comes from the narrow stationary and the
+  cyclic skew. Lead-1 widest cell: flow p(x) centred on the truth, skewed with a right tail.
+
+### F-54. Retrained on the exaggerated prior, the decoder matches / slightly beats the network-prior decoder (D-055, 2026-11-15)
+
+Seed 0, 2000 validation launches, members from the exaggerated prior; field units.
+
+| flow decoder | lead 1 RMSE / CRPS | lead 32 RMSE / CRPS | spread/RMSE (1 / 32) | corr(spread, error) (1 / 32) |
+|---|---|---|---|---|
+| fixed-Gaussian prior (F-52) | 0.0594 / 0.0320 | 0.2181 / 0.0681 | 1.18 / 1.06 | +0.16 / +0.25 |
+| network prior (F-52) | 0.0586 / 0.0317 | 0.2066 / 0.0601 | 1.15 / 1.04 | +0.18 / +0.58 |
+| exaggerated prior, net-prior decoder NOT retrained (F-53) | 0.0612 / 0.0327 | 0.2110 / 0.0645 | 1.09 / 1.00 | +0.20 / +0.60 |
+| **exaggerated prior, decoder retrained** | **0.0586 / 0.0316** | **0.2053 / 0.0593** | 1.13 / 1.03 | +0.15 / **+0.63** |
+
+- Retraining recovers the whole cost of the exaggerated shapes and at lead 32 is the best so far (CRPS 0.0593,
+  spread-error corr +0.63). The linear decoder on the same members is far behind (0.2277 / 0.0729) and under-dispersed
+  (U-shaped rank histogram); the flow stays over-dispersed per cell (dome, the F-48 issue).
+- Widest lead-32 cell through 150 launches: truth inside flow 5-95 % 85 % (slightly low); the flow median stays near the
+  local mean and the truth's peaks touch the upper band edge. Lead-32 middle cell: the flow distribution sits on the
+  truth, the linear one beside it.

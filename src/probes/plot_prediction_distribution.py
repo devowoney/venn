@@ -26,7 +26,8 @@ import matplotlib                                          # noqa: E402
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt                            # noqa: E402
 
-from src.models.family_net import GRID, FamilyNet, launch_features   # noqa: E402
+from src.models.family_net import GRID, DramaticSampler, FamilyNet, launch_features   # noqa: E402
+from src.models.family_prior import ETA                    # noqa: E402
 from src.models.flow_decoder import FlowDecoder            # noqa: E402
 from src.models.frontal_decoder import FrontalDecoder      # noqa: E402
 from src.train.fit_frontal_decoder import load_eye         # noqa: E402
@@ -48,6 +49,7 @@ def main():
     ap.add_argument("--time_launches", type=int, default=150)
     ap.add_argument("--time_members", type=int, default=64)
     ap.add_argument("--device", default="cuda")
+    ap.add_argument("--dramatic", action="store_true", help="draw from the exaggerated family prior (D-054)")
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
     dev = args.device
@@ -75,8 +77,12 @@ def main():
     m_, w_, LR, s_ = (torch.tensor(npz[k], dtype=torch.float32, device=dev) for k in ("m", "w", "chol_R", "sigma"))
     zh_t = torch.tensor(zhat, dtype=torch.float32, device=dev)
 
+    dram = DramaticSampler(args.run, args.hf_dir, args.obs_seed, val, dev) if args.dramatic else None
+
     def latent_members(t: np.ndarray, M: int) -> torch.Tensor:
-        """Joint draws of the network prior (the decoder's p(z)) for launches t -> [B, M, K] canonical z."""
+        """Joint draws of the decoder's p(z) (network, or the exaggerated prior) for launches t -> [B, M, K]."""
+        if dram is not None:
+            return dram.sample(t, M)
         eta = torch.randn(len(t), M, K, device=dev) @ LR.T
         return zh_t[t][:, None] + s_[None, None] * (m_[t][:, None] + w_[t][:, None] * eta)
 
@@ -110,6 +116,13 @@ def main():
                label="fixed Gaussian")
         A.plot(x, dens["gauss_net"][i] / sig[i], color=COL["net"], lw=2, label="network (decoder's prior)")
         A.plot(x, dens["family"][i] / sig[i], color=COL["family"], lw=1.5, label="network, family shape")
+        if dram is not None:                                       # density of the exaggerated prior from its table
+            # density from the quantile table: probability between neighbouring knots over their distance, drawn as a
+            # step curve so flat tops, soft edges and tails all show
+            q = dram.tab[dram.row[t0], i].cpu().numpy() + zhat[t0, i]
+            from scipy.special import ndtr
+            dp = np.diff(ndtr(ETA)) / np.maximum(np.diff(q), 1e-9)
+            A.stairs(dp, q, color="#a8401b", lw=2.2, label="exaggerated (decoded)")
         A.axvline(zhat[t0, i], color=COL["grey"], ls=":", lw=1.2, label="forecast ẑ")
         A.axvline(z[t0 + a, i], color=COL["truth"], lw=1.5, label="true z")
         A.set_xlim(zhat[t0, i] - 4 * sig[i], zhat[t0, i] + 4 * sig[i])
@@ -119,7 +132,8 @@ def main():
     ax.flat[0].set_ylabel("density")
     ax.flat[4].set_ylabel("density")
     ax.flat[0].legend(fontsize=7, frameon=False)
-    fig.suptitle(f"estimated p(z(t+{a})) for one validation launch (t = {t0})", fontsize=11)
+    fig.suptitle(f"estimated p(z(t+{a})) for one validation launch (t = {t0})"
+                 + (" -- decoder fed the EXAGGERATED prior" if dram is not None else ""), fontsize=11)
     fig.tight_layout()
     fig.savefig(os.path.join(args.out, "latent.png"), dpi=120)
     plt.close(fig)

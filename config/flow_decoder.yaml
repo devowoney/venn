@@ -14,7 +14,8 @@ fd:
   min_launch: 64        # skip launches with too short a history (the twin's own min_sight is 32)
   lead: 1               # step 1: lead 1 only (z(t+1))
   shrink: 0.1           # Sigma_1 = (1 - shrink) C + shrink diag(C), C = second moment of out-of-fold departures
-  prior: gauss          # gauss = N(zhat, Sigma_a) (D-048) | net = the launch-conditioned network's p(z) (D-053)
+  prior: gauss          # gauss = N(zhat, Sigma_a) (D-048) | net = the launch-conditioned network's p(z) (D-053) |
+                        # dramatic = the exaggerated family prior on the network (D-054 / D-055)
   prior_net: null       # net: directory holding gauss_net.pt (src/probes/train_family_net.py) for THIS seed and lead
   first_launch: 0       # first decoder launch (0 = min_launch); D-053 uses 300 so both priors fit the same launches
   cond: sample          # sample = condition on zhat_oof + Sigma_1^{1/2} eta (the whole Gaussian, paired with the real

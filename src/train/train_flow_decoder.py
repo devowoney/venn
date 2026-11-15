@@ -26,7 +26,7 @@ import hydra                                              # noqa: E402
 from omegaconf import DictConfig, OmegaConf               # noqa: E402
 from torch.utils.tensorboard import SummaryWriter         # noqa: E402
 
-from src.models.family_net import net_prior               # noqa: E402
+from src.models.family_net import DramaticSampler, net_prior   # noqa: E402
 from src.models.flow_decoder import FlowDecoder           # noqa: E402
 from src.models.frontal_decoder import FrontalDecoder     # noqa: E402
 from src.probes.eval_history_forecaster import load_run as load_hf   # noqa: E402
@@ -112,7 +112,7 @@ def main(cfg: DictConfig) -> None:
     fit_t = torch.arange(first, t_fit - a, device=device)                     # launches; targets < t_fit
     val_t = torch.arange(t_fit - a, t_tr - a, device=device)                  # held-out targets [t_fit, t_tr)
 
-    if str(fd.prior) == "net":
+    if str(fd.prior) in ("net", "dramatic"):
         # D-053: the launch-conditioned network's p(z) instead of the fixed Gaussian (its own centre and width per launch)
         fam = np.load(os.path.join(fd.hf_dir, f"twin_seed{int(fd.obs_seed)}", "norm.npz"))["fam"]
         sig_np = np.sqrt(np.diag(pr["Sigma"]))
@@ -123,11 +123,19 @@ def main(cfg: DictConfig) -> None:
         n_L = torch.tensor(npr["chol_R"], dtype=torch.float32, device=device)
         n_s = torch.tensor(sig_np, dtype=torch.float32, device=device)
         print(f"[fd] prior: network {fd.prior_net} (t0 {npr['t0']}), mean width {float(n_w[fit_t].mean()):.3f}")
+    if str(fd.prior) == "dramatic":
+        # D-055: the exaggerated family prior of D-054 (on the network's centre / width), tables for every fit and
+        # held-out launch, built once
+        dram = DramaticSampler(os.getcwd(), str(fd.hf_dir), int(fd.obs_seed), np.arange(first, t_tr - a), device,
+                               fn_dir=str(fd.prior_net))
+        print(f"[fd] prior: EXAGGERATED family prior on {fd.prior_net}")
 
     def cond(t: torch.Tensor, eta: torch.Tensor | None = None) -> torch.Tensor:
         if str(fd.cond).lower() == "true":                         # Hydra reads `true` as a boolean
             return z[t + a]
         eta = torch.randn(len(t), K, device=device) if eta is None else eta
+        if str(fd.prior) == "dramatic":
+            return dram.sample(t, 1, eta[:, None])[:, 0]
         if str(fd.prior) == "net":
             return zhat[t] + n_s * (n_m[t] + n_w[t] * (eta @ n_L.T))
         return zhat[t] + eta @ L.T                                    # a draw of N(zhat_oof, Sigma)

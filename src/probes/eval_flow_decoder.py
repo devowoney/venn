@@ -74,6 +74,8 @@ def main():
     ap.add_argument("--ode_steps", type=int, default=16)
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--replot", action="store_true", help="only redraw the figures of a finished readout")
+    ap.add_argument("--dramatic", action="store_true", help="members from the exaggerated family prior (D-054)")
+    ap.add_argument("--hf_dir", default="/home/sysadmin/jlee/venn/.claude/worktrees/history-forecastor/.tmps/runs_hf")
     args = ap.parse_args()
     if args.replot:
         return replot(args.out)
@@ -106,6 +108,10 @@ def main():
     K, M = z.shape[1], args.members
     launches = torch.arange(t_tr - a, T - a, device=dev)          # every target in the validation set
     n = len(launches)
+    dram = None
+    if args.dramatic:                                          # D-054: exaggerated family shapes on the network centre
+        from src.models.family_net import DramaticSampler
+        dram = DramaticSampler(args.run, args.hf_dir, int(ck["cfg"]["obs_seed"]), launches.cpu().numpy(), dev)
     print(f"[eval] {args.run} source={flow.source} cond={ck['cfg']['cond']} lead {a}: {n} validation launches, M={M}")
 
     def dec_lin(zz):                                           # canonical z [..., K] -> field [..., V, H, W]
@@ -126,7 +132,9 @@ def main():
         t = launches[i0:i0 + args.chunk]
         B = len(t)
         y = X[t + a]                                           # [B,V,H,W]
-        if netp is None:
+        if dram is not None:
+            zs = dram.sample(t, M)
+        elif netp is None:
             zs = zhat[t][:, None] + torch.randn(B, M, K, device=dev) @ L.T     # [B,M,K] latent members
         else:
             eta = torch.randn(B, M, K, device=dev) @ netp["chol_R"].T
@@ -163,7 +171,7 @@ def main():
             print(f"[eval] {i0 + B}/{n}", flush=True)
 
     tot = n * ncell
-    res = dict(lead=a, launches=n, members=M, source=flow.source, prior="net" if netp is not None else "gauss", cond=ck["cfg"]["cond"], obs_noise=obs_noise,
+    res = dict(lead=a, launches=n, members=M, source=flow.source, prior="dramatic" if dram is not None else ("net" if netp is not None else "gauss"), cond=ck["cfg"]["cond"], obs_noise=obs_noise,
                rmse={k: (v / tot) ** 0.5 for k, v in sse.items()})
     for m in methods:
         rmse = res["rmse"][m]

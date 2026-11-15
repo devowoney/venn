@@ -3139,3 +3139,33 @@ next prediction of z", in the family shapes of D-051.
 - Caveat: on the TRAINING launches the network's (m, w) are in-sample (it was fitted there; train vs select CRPS
   differ ~2 %), so the decoder trains on slightly sharp draws; validation draws are out of sample.
 - Runs `.tmps/runs_fd/fdB_l{1,32}_{gauss,net}` (`launch_stepB.sh`), eval `.tmps/eval_fd/fdB_*`.
+
+## D-054 — Test: an EXAGGERATED family prior fed to the step-B decoder (module 3)
+
+**Date:** 2026-11-15. **Source:** user after inspecting the estimated distributions: "we can make more dramatically (at
+least for test): stationary: Gaussian is good, but it should be narrower; cyclic: more skewed and biased on cyclic
+slope, and on the cyclic peak the skewed direction changes; chaotic: seems not bad; noise: literally uniform".
+- On the network's per-launch centre m and width w (scaled-error units, D-053): stationary Gaussian width 0.5 w;
+  cyclic ramp + tail along the sliding-fit direction s, σ_b 0.3 w, reach 1.5 w |sin θ̂| (0 at crest/trough, s flips
+  past it), σ_t 0.5 w; chaotic = first the network Gaussian (assistant reading of "not bad"), then, user correction
+  "for chaotic, go back to previous distribution (flat plateau shape)" -- first misread as a hard window; user: "return
+  to family shape distribution (represented in blue in latent.png), now I saw just a red line with no tail" -> EXACTLY
+  the family network's own density per launch, plateau with soft edges and tails, inverted from its CDF
+  (`family_quantiles`, family.pt of the same lead);
+  noise = first uniform over the channel's training range [min, max], ignoring ẑ (assistant reading of "literally
+  uniform"); then user: "for noise, let's put family shape as well, not uniform" -> the family network's own noise
+  density (a per-launch Gaussian), `family_quantiles`.
+- Same Gaussian copula (network residual R). Decoders NOT retrained: the D-053 network-prior decoders read the new draws.
+- Code: `family_net.DRAMATIC`, `dramatic_tables`, `DramaticSampler`; `eval_flow_decoder.py --dramatic`,
+  `plot_prediction_distribution.py --dramatic`. Out: `.tmps/eval_fd/fdB_l{1,32}_net_dramatic/`,
+  `.tmps/eval_fd/fdB_l{1,32}_net/distribution_dramatic/`.
+
+## D-055 — Decoder RETRAINED on the exaggerated family prior (module 3)
+
+**Date:** 2026-11-15. **Source:** user "retrain the decoder on the exaggerated prior" (after D-054 with chaotic and noise
+on their family-net shapes).
+- Prior = D-054 final: stationary Gaussian 0.5 w; cyclic ramp + tail along s (σ_b 0.3 w, reach 1.5 w |sin θ̂|, σ_t
+  0.5 w); chaotic = family-net plateau density; noise = family-net Gaussian; network centre m, Gaussian copula R.
+- `fd.prior: dramatic` (trainer builds `DramaticSampler` tables for every fit / held-out launch once); otherwise the
+  D-053 recipe (D-050 decoder, first_launch 320). Leads 1 and 32, seed 0. Caveat as D-053: networks in-sample on the
+  training launches. Runs `.tmps/runs_fd/fdD_l{1,32}` (`launch_dramatic.sh`), eval `.tmps/eval_fd/fdD_l{1,32}/`.
