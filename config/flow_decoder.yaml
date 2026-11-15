@@ -1,0 +1,47 @@
+# VENN module 3 — FLOW-MATCHING DECODER (D-048, SOP 05 "Flow-matching decoder"). Every hyperparameter lives here (D-014).
+# Gaussian latent forecast z(t+1) ~ N(zhat, Sigma_1) -> distribution of the raw field x(t+1).
+#   python -m src.train.train_flow_decoder fd.obs_seed=0
+defaults:
+  - config              # inherit seed / device from the encoder config
+  - _self_
+
+fd:
+  hf_dir: /home/sysadmin/jlee/venn/.claude/worktrees/history-forecastor/.tmps/runs_hf
+  obs_seed: 0           # observer seed: twin = twin_seed{s}, folds = fold{k}_seed{s}; the eye is the twin's encoder_run
+  folds: 4              # D-045 cross-fitting: fold k left out targets of [2000k, 2000k+2000) -> out-of-fold forecasts
+  t_tr: 8000            # [0, t_tr) = training set; [t_tr, T) = validation, never read here
+  t_fit: 7750           # flow pairs with target < t_fit train; [t_fit, t_tr) = held-out slice for model selection
+  min_launch: 64        # skip launches with too short a history (the twin's own min_sight is 32)
+  lead: 1               # step 1: lead 1 only (z(t+1))
+  shrink: 0.1           # Sigma_1 = (1 - shrink) C + shrink diag(C), C = second moment of out-of-fold departures
+  prior: gauss          # gauss = N(zhat, Sigma_a) (D-048) | net = the launch-conditioned network's p(z) (D-053)
+  prior_net: null       # net: directory holding gauss_net.pt (src/probes/train_family_net.py) for THIS seed and lead
+  first_launch: 0       # first decoder launch (0 = min_launch); D-053 uses 300 so both priors fit the same launches
+  cond: sample          # sample = condition on zhat_oof + Sigma_1^{1/2} eta (the whole Gaussian, paired with the real
+                        #          outcome: field spread learned against reality, D-048 default) |
+                        # true   = condition on the true z(t+1) (faithful p(x | z); spread from Sigma_1 only)
+  # --- model ---
+  source: noise         # noise  = x0 = sigma0 eps, velocity reads x_s and z~ only: decoding from the latent ALONE (D-049) |
+                        # launch = x0 = x(t) + sigma0 eps, x(t) also an input channel (D-048 step 1, F-46)
+  zmap: 32              # channels of the learned spatial map z~ -> [zmap, 16, 16], added in every block (D-050);
+                        # 0 = FiLM only (D-048 / D-049 runs): x-translation equivariant, cannot place eddies from z (F-47)
+  sigma0: 1.0           # source scale, field units (each variable ~unit std, so N(0, I) matches the field's size)
+  ch: [64, 128, 192]    # U-Net widths at 64, 32, 16 cells
+  emb: 256
+  # --- optimization ---
+  steps: 20000
+  batch: 32
+  lr: 2.0e-4
+  weight_decay: 0.0
+  grad_clip: 1.0
+  ema: 0.999            # exponential moving average of the weights, used for evaluation and the saved model
+  eval_every: 1000      # held-out flow loss (fixed noise, s, eta) with EMA weights; the best checkpoint is kept
+  # --- sampling (evaluation) ---
+  ode_steps: 16
+  members: 32
+
+hydra:
+  run:
+    dir: ${hydra:runtime.cwd}/.tmps/runs_fd/${now:%Y%m%d_%H%M%S}
+  job:
+    chdir: true

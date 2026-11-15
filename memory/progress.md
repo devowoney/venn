@@ -2072,3 +2072,34 @@ the user; next step (user decides): per-lead target scale for the over-wide shor
   every family, but rougher members, worse chaotic joint NLL and worse cyclic h64 mean. `eval_eye_flow` fixed for
   per-seed eye lists (`prob.npz` saved). Decision on the trade-off left to the user.
 - User ruling: "go back to no scale" -> config default `target_scale: none`; current recipe = `flow_seed{0..4}`.
+
+#### 2026-11-12 — Non-linear FLOW-MATCHING DECODER, step 1 (D-048, F-46), branch `memory-interpreter`
+User: "build non-linear flow matching decoder ... history prediction z(t+1) has normal distribution uncertainty and
+decoder is trying to find a random noise x(t)·noise -> D(z(t+1))". Records first (D-048, SOP 05 "Flow-matching
+decoder", design record §13), then built `src/models/flow_decoder.py` (conv U-Net, FiLM by flow time + latent draw),
+`config/flow_decoder.yaml`, `src/train/train_flow_decoder.py` (out-of-fold Gaussian prior from the D-045 folds,
+linear baseline refit on the 43 live channels, flow training), `src/probes/eval_flow_decoder.py` (lead-1 readout,
+`--replot`). Bug caught on the way: Hydra parses `fd.cond=true` as a boolean, so the first `cond: true` run trained
+`sample` (identical logs). Fixed with a case-insensitive check and rerun. Seed 0 result in F-46. No commits (user handles git).
+Next (user decides): separate x(t) information from non-linearity (linear [z~, x(t)] baseline); calibrate the ~9 %
+over-width (sigma0, or ODE steps); other leads (z(t+a), a > 1); 5 seeds.
+
+
+### 2026-11-13 — module 3 restart: pure-noise flow decoder from z~ only (D-049, D-050; F-47, F-48)
+User restated the chain (attention z_{0..t} -> z_{t+1}; z Gaussian by compression; a velocity-based non-linear decoder
+for p(x_{t+1}) instead of a linear map) and chose a pure-noise source conditioned on z~ only. First run (FiLM only)
+failed: members realistic but eddies at random x -- the net is x-shift equivariant (F-47). User chose a learned spatial
+map z~ -> 16x16 grid (D-050): lead-1 RMSE 0.0593 vs linear 0.0652, ~equal to the x(t)-reading flow (0.0581), so the
+gain is non-linear decoding (F-48). Seeds 1-4 (user choice): flow wins on all 5 seeds, RMSE 0.0607 vs 0.0654 (7 %),
+CRPS gain smaller; over-dispersion 1.18-1.26 on every seed. Next step for the user to choose.
+Then (user) a new configuration: a family-shaped p(z) (D-051; stationary Gaussian, cyclic ramp + tail from a sliding
+cos/sin fit, chaotic uniform window, Gaussian copula). Step A at lead 1, seed 0 (F-49): every family's error is
+Gaussian; κ -> 0, uniform worse; the family prior is +0.4 % worse in CRPS. Shapes need longer leads; user to decide.
+2026-11-14: user asked for a small network giving p(z(t+1)) in the family shapes (D-052). F-50: the network beats the
+fixed Gaussian (-4.5 % CRPS overall, chaotic -24 %), but the all-Gaussian control does as well; the chaotic gain is
+mostly a better centre than ẑ. Next step for the user to choose.
+Leads 8/32/64 (user choice, F-51): the network beats the fixed Gaussian at every lead (all channels -4.5 / -17 / -13 /
+-8 %), the family shape never adds more than ±1 % over the all-Gaussian network; gains are mostly a better centre
+(cyclic growing with lead, chaotic shrinking), spread honest per launch at long leads. Next step for the user.
+Step B (user, D-053 / F-52): decoder on the network's p(z), leads 1 and 32. Lead 32: field CRPS 0.0681 -> 0.0601
+(-12 %), RMSE -5 %, spread-error corr +0.25 -> +0.58; lead 1 ~1 %. Per-cell over-dispersion remains. Next for the user.

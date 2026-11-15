@@ -1810,3 +1810,192 @@ is what the history cannot tell (unpredictable chaos, noise), which no choice of
 testbed the noising step would have to supply ~all of the width -> it reduces to a Gaussian around ~one prediction
 (F-43). Attention scenarios could matter where the evidence is NOT redundant (non-stationary records, regime changes,
 rare events seen once).
+
+### F-46. Flow-matching decoder, step 1 (lead 1, seed 0): sharper and better-scored than the linear-Gaussian chain on the same latent members, slightly too wide, weak per-launch spread signal (D-048, 2026-11-12)
+
+Runs `.tmps/runs_fd/fd_seed0` (cond: sample, default) and `fdtrue_seed0` (cond: true); eval `.tmps/eval_fd/<run>/`
+(`summary.txt`, `metrics.json`, `scores.png`, `snapshot.png`). 2000 validation launches, M = 32, field units, obs
+noise 0.05. Latent prior honest: out-of-fold lead-1 departure RMS 0.161 (z units) vs the twin's validation RMS 0.163.
+
+| lead 1, vs observed x(t+1) | RMSE | CRPS | spread/RMSE | corr(spread, error) over launches |
+|---|---|---|---|---|
+| flow decoder (cond: sample) | **0.0581** | **0.0314** | 1.09 | +0.12 |
+| linear D(z~) + iid residual | 0.0652 | 0.0337 | 1.02 | +0.01 |
+| linear D(zhat), deterministic | 0.0642 | | | |
+| linear D(z true) = decoding ceiling | 0.0509 | | | |
+| persistence x(t) | 0.1099 | | | |
+
+- With the true z the linear decoder is already at the noise floor (training residual 0.0508 vs obs noise 0.05): given
+  a correct latent state there is almost nothing left that is non-linear. The whole gain is in how the latent ERROR
+  becomes a field error.
+- Where the gain lives: the error spectrum of the flow mean is about half the linear chain's at wavenumbers 1-8 and equal
+  above ~10 (white observation noise). The snapshot shows a chaotic eddy that the linear chain puts at the wrong spot
+  (|error| 0.6), while the flow nearly removes it. Caveat: the flow also reads the launch field x(t), which the
+  linear chain does not, so part of the gain may be x(t) information rather than non-linearity. Not separated yet: a linear
+  baseline on [z~, x(t)] is needed.
+- Members: physical-looking fields carrying the observation-noise texture. Member spectrum = truth spectrum at every scale.
+  Spread spectrum ≈ error spectrum at every scale (the spread has the right scale structure).
+- Calibration: rank histogram hump-shaped (edges 0.68 of flat), so the flow is ~9 % too wide; the linear-Gaussian chain
+  is flat (1.02).
+- Per-launch signal: weak (+0.12), but present where the linear chain has none (+0.01).
+- cond: true (decoder trained on the true z): mean RMSE 0.0610, CRPS 0.0325, spread/RMSE 1.08, corr +0.01, so it is
+  worse than cond: sample on every score. Given the true z it decodes to 0.0546 (8 members; the ceiling is 0.0509).
+  Training on the whole Gaussian latent distribution, paired with real outcomes, is what carries the gain (H5 as corrected by the user).
+- "flow | z true" in the cond: sample run (0.0612) is a mean of 8 members, so it carries extra sampling noise
+  (~0.063²/8). It is not comparable to the 32-member rows.
+
+### F-47. Pure-noise flow decoder (z~ only) ignores the latent state: realistic members at random x-positions, climatological mean (D-049, 2026-11-13)
+
+Run `.tmps/runs_fd/fdnoise_seed0`, eval `.tmps/eval_fd/fdnoise_seed0/` (`scores.png`, `snapshot.png`). Lead 1, seed 0,
+2000 validation launches, M = 32, field units.
+
+| lead 1, vs observed x(t+1) | RMSE | CRPS | spread/RMSE |
+|---|---|---|---|
+| flow, source noise, z~ only | 0.503 | 0.241 | 0.98 |
+| flow, source noise, true z | 0.526 | | |
+| linear D(z~) + iid residual | 0.065 | 0.034 | 1.02 |
+
+- Members are realistic fields (spectrum = truth at every wavenumber; eddies, fronts, the y-banded jet all present), but
+  the eddies sit at RANDOM x-positions: the member mean is zonally uniform (a climatology) and the error is the eddies.
+  Conditioning on the TRUE z is no better -> the flow does not use z for "where". Calibration looks fine only because a
+  climatology is calibrated; spread-error corr +0.88 is just "more eddies, more error".
+- Cause (structural, not training): the velocity net is x-translation equivariant -- circular convolutions in x, and
+  z~ enters only by FiLM (one scale/shift per channel, the same at every cell). Checked numerically: rolling the input by
+  8 or 16 cells rolls the velocity by the same amount to 5e-7 (exact for shifts that are multiples of 4, the pooling
+  factor; so position is known only mod 4 cells). With a pure-noise source nothing
+  in the input fixes an x-position, so the output distribution is x-shift invariant whatever z says. y is not
+  symmetric (replicate padding), which is why the y-structure is right. In D-048 the launch field x(t) supplied the
+  positions -- so F-46's gain was carried by x(t) for "where".
+- Consequence: z must enter SPATIALLY (a learned map z -> feature grid, or coordinate channels) for a z-only decoder.
+
+### F-48. Pure-noise flow decoder with z~ as a learned SPATIAL map beats the linear decoder from z~ alone; x(t) was not the source of F-46's gain (D-050, 2026-11-13)
+
+Run `.tmps/runs_fd/fdzmap_seed0`, eval `.tmps/eval_fd/fdzmap_seed0/`. Lead 1, seed 0, 2000 validation launches,
+M = 32, field units, same latent members for both decoders.
+
+| lead 1, vs observed x(t+1) | RMSE | CRPS | spread/RMSE | corr(spread, error) |
+|---|---|---|---|---|
+| flow, pure noise, z~ spatial map (zmap 32) | **0.0593** | **0.0320** | 1.18 | +0.16 |
+| linear D(z~) + iid residual | 0.0652 | 0.0337 | 1.02 | +0.01 |
+| (F-46 flow from noised x(t), reads x(t)) | 0.0581 | 0.0314 | 1.09 | +0.12 |
+| linear D(z true), ceiling | 0.0509 | | | |
+
+- Eddies now sit where the truth has them (snapshot). The gain is again at large scales: the error spectrum of the flow
+  mean is ~0.6x the linear chain's at k 1-8, equal above ~10 (white obs noise). Snapshot: the NE eddy's SSH error
+  ~0.25 vs ~0.5 for the linear chain; SST is at the noise floor for both.
+- Answers the F-46 caveat: with NO access to x(t) the flow reaches 0.0593, within 0.0012 of the x(t)-reading flow ->
+  the gain is non-linear decoding of the latent state, not launch-field information.
+- Too wide: dome-shaped rank histogram, spread/RMSE 1.18; the spread spectrum sits above the error spectrum at k > 10
+  (the members' small-scale noise is a bit too strong). Per-launch spread signal weak (+0.16).
+- Flow given the TRUE z: 0.0622, worse than the linear ceiling 0.0509 -- it was trained on noisy z~ (cond: sample), so
+  it decodes a z as "z with forecast error around it", not as an exact state.
+- **Seeds 0-4** (`fdzmap_seed{0..4}`, cross-seed figure `.tmps/eval_fd/fdzmap_seeds.png`): the flow wins on EVERY seed.
+
+  | seed | 0 | 1 | 2 | 3 | 4 | mean |
+  |---|---|---|---|---|---|---|
+  | RMSE flow | 0.0593 | 0.0618 | 0.0586 | 0.0635 | 0.0603 | **0.0607** |
+  | RMSE linear | 0.0652 | 0.0650 | 0.0641 | 0.0679 | 0.0648 | 0.0654 |
+  | CRPS flow / linear | .0320/.0337 | .0327/.0334 | .0319/.0335 | .0333/.0342 | .0324/.0337 | |
+  | spread/RMSE flow | 1.18 | 1.25 | 1.22 | 1.26 | 1.21 | |
+
+  RMSE gain 0.0047 +- 0.0010 (7 %), CRPS gain 0.0012 (smaller: over-dispersion eats part of it; seeds 1, 3 only
+  ~0.0008). Error power flow/linear = 0.5-0.85 at k 1-8 on every seed, 1.0 above k ~ 10. Over-dispersion (1.18-1.26)
+  is systematic, not a seed accident; the linear chain is calibrated (1.00-1.03).
+
+### F-49. At lead 1 the latent forecast error is Gaussian in EVERY family: no ramp, no uniform (D-051 step A, 2026-11-13)
+
+Seed 0, lead 1, prior fitted on 7703 out-of-fold launches, read on 2000 validation launches against the true z(t+1);
+eval `.tmps/eval_fp/seed0/` (`summary.txt`, `pit.png`, `shapes.png`, `cyclic_band.png`). Marginal fair CRPS, canonical
+z units (M = 256), family prior vs Gaussian: stationary 0.3784 vs 0.3784, cyclic 0.0382 vs 0.0379 (+0.8 %), chaotic
+0.0386 vs 0.0380 (+1.5 %), noise equal; all 43 channels +0.4 % (worse).
+
+- Cyclic: ML drives the reach scale κ to 0 on all 16 channels (no plateau ahead). Errors aligned to the direction of
+  travel have mean -0.008 σ and skewness -0.02, symmetric and Gaussian near the crest, between, and mid-cycle alike.
+  The forced Φ-ramp asymmetry (σ_b 1.4σ behind, σ_t 0.85σ ahead) is the best fit the shape allows, and it is slightly
+  wrong. Why: at lead 1 the forecaster already knows the phase; the band of ch 0 (period 296) is ~0.04 wide on a cycle of
+  amplitude 1.5. The error is measurement-like noise, not phase uncertainty; the cycle moves only ~0.6 σ per step.
+- Chaotic: errors are peaked (Gaussian); the uniform window puts too little mass at ẑ and none in the tails (PIT
+  hump-shaped, too wide in the middle, ~0.65-0.75 at the edges).
+- Reading: the family shapes describe the error once the forecast has LOST information (phase drift, chaotic
+  divergence), which needs lead time; at lead 1 nothing has been lost yet. The shapes must be tested at longer leads.
+
+### F-50. A launch-conditioned network sharpens p(z(t+1)) — via the chaotic CENTRE, not via the family shape (D-052, 2026-11-14)
+
+Seed 0, lead 1, 2000 validation launches; `.tmps/eval_fn/seed0/` (`summary.txt`, `pit.png`, `bands.png`,
+`spread_error.png`). CRPS, canonical z units:
+
+| family | fixed Gaussian | network, Gaussian | network, family shape |
+|---|---|---|---|
+| stationary (7) | 0.3783 | 0.3783 | 0.3784 |
+| cyclic (16) | 0.0379 | 0.0360 | 0.0363 |
+| chaotic (17) | 0.0380 | **0.0287** | 0.0289 |
+| noise (3) | 0.0218 | 0.0218 | 0.0218 |
+| all 43 | 0.0922 | 0.0878 | 0.0881 |
+
+- The family SHAPE adds nothing at lead 1 (family net +0.3 % vs Gaussian net, every family): consistent with F-49.
+  The chaotic uniform even bends the PIT (dips near 0.15 / 0.85); the Gaussian net's PIT is flat in every family.
+- The gain is the per-launch conditioning, and for chaotic channels it is mostly the CENTRE: the network's median has
+  RMSE 0.753 σ vs ẑ's 0.967 σ (-22 %), and a Gaussian at that centre with a fixed width already gets 0.4175 of the net's
+  0.4092 (σ units) -> centre ~80 % of the gain, per-launch width the rest. It is not a damping of the forecast step
+  (corr(shift, step) -0.07). So module 2's lead-1 forecast of chaotic channels is improvable from the channel's own
+  last ~16 steps (delay embedding) + ẑ — a finding for module 2.
+- Spread follows error only for chaotic (spread 0.37-1.08 σ over launches); cyclic, stationary, noise barely vary.
+  **Correction (2026-11-14, F-51):** these spread-error numbers measured the error from ẑ, not from the network's own
+  centre. Measured from each distribution's median: corr(spread, |error|) at lead 1 = cyclic +0.07, chaotic +0.31.
+  (Seed-0 lead-1 CRPS unchanged after the cycle-window fix of F-51: 0.0922 / 0.0878 / 0.0881.)
+
+### F-51. Family-shape network at leads 1-64: the network wins at every lead, the family shape still adds nothing (D-052, 2026-11-14)
+
+Seed 0, out-of-fold priors at leads 8/32/64 (`.tmps/runs_fn/prior_lead{a}`, `make_priors.py`), eval
+`.tmps/eval_fn/seed0_lead{1,8,32,64}/`. CRPS on the true z(t+a), canonical z units, 2000 validation launches.
+Cycle window fixed first: a full period of past + ẑ at the target (the "last period ending at ẑ" window is empty for
+leads >= the period; checked on a synthetic cycle at leads 1-64).
+
+| lead | all: fixed Gauss / net Gauss / net family | cyclic | chaotic | RMSE of centre, cyclic (ẑ -> net) | chaotic |
+|---|---|---|---|---|---|
+| 1 | 0.0922 / 0.0878 / 0.0881 | -4 % | -24 % | 1.00 -> 0.97 σ | 0.97 -> 0.75 σ |
+| 8 | 0.1628 / 0.1344 / 0.1347 | -11 % | -34 % | 0.97 -> 0.82 σ | 0.79 -> 0.67 σ |
+| 32 | 0.2834 / 0.2492 / 0.2476 | -27 % | -15 % | 0.95 -> 0.69 σ | 0.88 -> 0.80 σ |
+| 64 | 0.2963 / 0.2713 / 0.2713 | -28 % | -9 % | 0.91 -> 0.68 σ | 0.89 -> 0.85 σ |
+(% = net family vs fixed Gaussian; stationary and noise ~0 at every lead.)
+
+- Family shape vs the same network all-Gaussian: within ±1 % at every lead and family (best: chaotic lead 32, -1.1 %;
+  worst: noise lead 64, +1.6 %). The shapes do not show up in the errors, even when the forecast has lost information.
+- Gains come from conditioning on the launch, mostly through the CENTRE. Cyclic: the gain GROWS with lead. Module 2's
+  long-lead cyclic forecast is jagged around a smooth truth (band figure, ch 0 at lead 32), and the sliding cos/sin
+  fit + net cleans it (0.95 -> 0.69 σ). Chaotic: the gain SHRINKS with lead as predictability is lost (-34 % at 8 ->
+  -9 % at 64), the right physics.
+- Spread is honest per launch where it matters: measured from each model's own median, corr(spread, |error|) cyclic
+  +0.07 / +0.15 / +0.34 / +0.39, chaotic +0.31 / +0.61 / +0.45 / +0.46 at leads 1 / 8 / 32 / 64. At lead 32 the binned
+  spread-error curves of both families lie on the diagonal. Stationary and noise have no per-launch spread signal.
+- Fixed Gaussian at long leads is too wide for chaotic (hump PIT): its Σ is from out-of-fold errors, ~10 % larger
+  than the twin's validation error; the networks, trained on the same out-of-fold errors, are near flat.
+- Reading for module 2: a small per-channel network over the channel's own recent past improves ẑ itself (cyclic at long
+  leads, chaotic at short ones), so the forecaster is not using each channel's own trajectory fully.
+
+### F-52. A launch-conditioned p(z) makes p(x) sharper and its spread honest per launch — most at long lead (D-053, 2026-11-14)
+
+Seed 0, 2000 validation launches, M = 32, field units (obs noise 0.05). Same decoder recipe and launches; only p(z)
+changes (fixed Gaussian N(ẑ, Σ_a) vs the network). The linear decoder D(z~) + iid residual is read on the same members.
+
+| | lead 1: Gauss p(z) | lead 1: net p(z) | lead 32: Gauss p(z) | lead 32: net p(z) |
+|---|---|---|---|---|
+| flow RMSE | 0.0594 | 0.0586 | 0.2181 | **0.2066** |
+| flow CRPS | 0.0320 | 0.0317 | 0.0681 | **0.0601** |
+| flow spread/RMSE | 1.18 | 1.15 | 1.06 | 1.04 |
+| flow corr(spread, error) over launches | +0.16 | +0.18 | +0.25 | **+0.58** |
+| linear RMSE / CRPS | 0.0652 / 0.0337 | 0.0619 / 0.0327 | 0.2422 / 0.0774 | 0.2241 / 0.0680 |
+| (persistence / linear D(ẑ)) | 0.1099 / 0.0642 | | 0.8030 / 0.2376 | |
+
+- Lead 32: field RMSE -5 %, CRPS -12 %, and the per-launch spread now spans ~0.13-0.30 and follows the error
+  (corr +0.25 -> +0.58; scatter on the diagonal) — the decoder passes the latent per-launch uncertainty to the field.
+  Lead 1: small gain (-1 % CRPS), as expected from F-50 (p(z) itself gains only 4.5 % there).
+- The flow beats the linear decoder under both priors at both leads (lead 32 net: 0.2066 vs 0.2241 RMSE).
+- Snapshot (lead 32): the spread sits on the small eddies, where the error is; members create / drop small eddies.
+- Still: rank histogram dome-shaped per cell (members too spread per cell, spread/RMSE 1.04-1.15), the F-48 issue.
+- Estimated distributions (user: "give me the estimated distribution on prediction too";
+  `src/probes/plot_prediction_distribution.py`, `.tmps/eval_fd/fdB_l{1,32}_net/distribution/`): latent densities per
+  family (chaotic net ~3x narrower than the fixed Gaussian, truth inside; cyclic family shape visibly skewed per launch);
+  field p(x) at single cells -- at the widest cell the flow's members are centred on the truth (lead 1) or skewed with
+  an eddy / no-eddy tail (lead 32), where the linear members are broad and off-centre; widest cell through 150 launches:
+  truth inside flow 5-95 % 90 % (lead 32), 98 % (lead 1, too wide); at lead 32 the flow band there is near-climatological.

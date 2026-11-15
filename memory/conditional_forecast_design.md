@@ -220,3 +220,56 @@ code (`block_mask`, `attn_mask`, `hf.mask`) in `history_forecaster.py` / `train_
 evals `.tmps/runs_pf`, `.tmps/eval_pf`, `.tmps/runs_hf/mask_seed*`, `.tmps/eval_hf/{one_step,sight,mask}`.
 Kept: every .md record; the cross-fitting option `hf.holdout` (D-045) and the 20 fold runs `.tmps/runs_hf/fold{0..3}_seed{0..4}`
 (+ `launch_folds.sh`) = the out-of-fold forecasts H5 trains on; the twin runs.
+
+## 13. H5 built as a NON-LINEAR flow-matching decoder (user 2026-11-12) -> D-048
+User: "build non-linear flow matching decoder ... history prediction z(t+1) has normal distribution uncertainty and
+decoder is trying to find a random noise x(t)·noise -> D(z(t+1))". Assistant reading (assumptions recorded in D-048):
+source = launch field x(t) + Gaussian noise, target = observed x(t+1), condition = a draw of the Gaussian latent
+forecast N(ẑ, Σ_1) (Σ_1 out-of-fold); step 1 = lead 1, seed 0, against the linear-Gaussian baseline. Branch
+`memory-interpreter` (module 3).
+
+### Step-1 result (2026-11-12) -> F-46
+Lead 1, seed 0: flow decoder RMSE 0.0581 / CRPS 0.0314 vs linear-Gaussian 0.0652 / 0.0337 on the same latent members;
+the gain is at large scales (k 1-8). It is ~9 % too wide and has a weak per-launch signal (+0.12). cond: sample beats cond: true.
+Open: is the gain non-linearity, or only the launch field x(t) the flow reads (linear [z~, x(t)] baseline)? Next: user decides.
+
+## 14. Restart: pure-noise source, z~ only (user 2026-11-13) -> D-049
+User restated the chain: attention over z_{0..t} -> z_{t+1}; z Gaussian (strong compression); a decoder that uses a
+VELOCITY inside the distribution to give p(x_{t+1}) instead of a linear map. Assistant: p(x_{t+1}) = ∫ p(x|z) N(z; ẑ, Σ) dz;
+linear = fixed-Gaussian p(x|z), flow = learned p(x|z) (velocity in x-space, flow time s, conditioned on z̃). Offered
+(a) keep the x(t) design and add a linear [z̃, x(t)] baseline, or (b) rebuild from pure noise with z̃ only. User: **(b)**.
+
+## 15. Family-shaped latent distribution p(z) -> non-linear decoder (user 2026-11-13)
+User: "From prediction of ẑ, now interpret p(z) ... make a connection with encoder. We have dynamic families ...
+Stationary - Gaussian distribution in linear value; Cyclic - skewed distribution (Gaussian of linear behaviour inner
+product cyclic range Gaussian); Chaotic - uniform distribution. Then non-linear mapping p(z) to p(x)." (Stops the
+over-dispersion fix of F-48.)
+Facts: family per live channel = `fam` in module 2's `norm.npz` (observer predictability labels, D-035/D-040); seed 0
+live 43 = 7 stationary, 16 cyclic, 17 chaotic, 3 noise. No stored period/phase/amplitude; FFT periods ~300/140/60.
+Assistant draft: one marginal per family around ẑ_i, joined by a GAUSSIAN COPULA of the out-of-fold Σ (correlated
+scores -> each channel's family-shaped inverse CDF); noise family Gaussian like stationary; decoder = D-050 flow,
+retrained on draws of the new p(z).
+- Q1 chaotic support -> user: **uniform window ẑ_i ± √3 σ_i** (same variance as the forecast error) at lead 1;
+  **a window widening with lead** (toward the climatological range past ~1 Lyapunov time) for longer leads.
+- Q2 cyclic SHAPE -> user (correcting the assistant's "mid-cycle ≈ Gaussian" from a Gaussian phase error): "in mid
+  cycle not exactly Gaussian ... rather cumulative distribution shape ... if the cyclic signal is going up, the upside
+  probability is huge and downside is small ... near the crest the probability goes down like tails". Agreed form, with
+  s = direction of travel and u = s (z - ẑ):
+      p(u) ∝ Φ(u / σ_b) · exp(-max(0, u - r)² / (2 σ_t²))
+  CDF ramp in the direction of travel up to the REACH r (how far the cycle moves within the lead, capped at the distance
+  to the crest / trough; near the crest r -> 0 and only the tail is left), then a Gaussian tail. User: "yes, ramp up to
+  reach r then tail". σ_b, σ_t, reach scale fitted per channel by ML on out-of-fold departures; joins the copula.
+- Q3 launch phase -> user: **sliding cos/sin fit** c + a cos ωτ + b sin ωτ (ω from the channel's FFT period on
+  [0, t_tr)) over the last period of the channel's own past, ending at ẑ(t+a). Gives s = sign of the fitted slope at
+  t+a, crest/trough = c ± Â, and the cycle's own move over the lead (sets the reach r).
+- Plan (one step at a time): step A = build p(z) alone and score it on the TRUE z(t+1) (PIT per family, CRPS vs the
+  Gaussian, shape figures); step B = retrain the D-050 flow decoder on draws of p(z) -- only after step A is seen.
+
+## 16. A small network gives the distribution of z(t+1) in the family shapes (user 2026-11-14) -> D-052
+After F-49 the assistant proposed a free-form z-space flow; user: "with this we can not make probability of z, it is just
+sampling" (a flow's density exists but only jointly and as a number per point; not a readable p(z_i)). Assistant
+offered binned / mixture densities; user: "No, let's return to distribution shape that I suggested. Why not build a
+small network which gives a distribution of the next prediction of z?" Earlier clarification (user): the shapes need not
+be Gaussian for stationary and cyclic, they were "reference and idea; the main goal is to make a probability
+distribution". Built: per-launch parameters of the family shapes from a small per-family network, + an all-Gaussian
+control with the same inputs (F-50).

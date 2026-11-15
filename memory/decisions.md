@@ -1312,6 +1312,80 @@ predictor and set `hf.mask.enable: true` as the config default; both undone the 
   `memory/conditional_forecast_design.md` §11). The mask code and the `mask_seed*` runs were removed in the worktree
   cleanup (design record §12). The current forecaster is the PLAIN deterministic twin (D-043 Q6a, `twin_seed{0..4}`).
 
+## D-048 — NON-LINEAR FLOW-MATCHING DECODER (module 3): Gaussian latent forecast -> raw-field distribution (H5)
+
+**Date:** 2026-11-12. **Source:** user H5 (design record `memory/conditional_forecast_design.md` §11) and "build
+non-linear flow matching decoder ... history prediction z(t+1) has normal distribution uncertainty and decoder is trying
+to find a random noise x(t)·noise -> D(z(t+1))". Branch `memory-interpreter`. SOP 05 "Flow-matching decoder".
+
+- Module 2 = the plain deterministic twin (D-043 Q6a, `twin_seed*`). Its forecast carries a GAUSSIAN error:
+  z(t+1) ~ N(ẑ(t+1), Σ_1). Σ_1 = covariance of the twin's OUT-OF-FOLD lead-1 departures (D-045 folds
+  `fold{0..3}_seed*`, honest: in-sample residuals would be too narrow), full K x K (43 x 43, ~7900 launches), shrunk
+  10 % toward its diagonal.
+- Module 3 = conditional flow matching in FLOW time s ∈ [0,1] (unrelated to physical time), on the raw field in field
+  units (each variable ~unit std; balanced units were rejected: quiet cells become unit-size noise):
+    source  x0 = x(t) + σ0 ε,  ε ~ N(0, I)          the field at launch, noised ("x(t)·noise"), σ0 = 1
+    target  x1 = x(t+1)                               the observed raw field that really follows
+    path    x_s = (1 - s) x0 + s x1;  loss |v(x_s, s | x(t), z̃) - (x1 - x0)|²
+    condition z̃ = ẑ_oof(t+1) + Σ_1^{1/2} η, η drawn fresh every step (`fd.cond: sample`, default): the decoder sees
+    the WHOLE latent distribution, paired with the real outcome, so the raw-field spread is learned against reality
+    (H5 corrected: "match the whole distribution of z"). `fd.cond: true` = condition on the true z(t+1)
+    (a faithful p(x | z); the field spread then comes from Σ_1 only) -- kept as the comparison switch.
+- Forecast: member m draws z̃_m ~ N(ẑ(t+1), Σ_1) and its own ε_m, integrates the ODE (Heun, 16 steps) -> x_m.
+- Velocity net: small conv U-Net on [x_s, x(t)] (2+2 channels, 64x64, circular in x like the testbed, replicate
+  in y), FiLM of every block by (s, z̃). Why non-linear: the cells no eye sees (x^perp) and the cross-cell structure
+  the linear ridge cannot hold are regenerated here (H1).
+- Fair baseline (same latent members): linear ridge decoder D (SOP 05, refitted on the 43 live channels, [0, 8000)) on
+  z̃_m + iid Gaussian per-cell residual (training variance of x - D z_true). References: D(ẑ), D(z_true), persistence.
+- Step 1 (assistant defaults, "one step at a time"): LEAD 1 only, observer seed 0; fit pairs with targets in
+  [64, 7750), model selection on [7750, 8000) (fixed-noise FM loss), validation [8000, 10000) never seen.
+  Readout lead 1: field RMSE of the member mean, fair CRPS per cell, spread/RMSE, spread-error correlation over launches,
+  rank histogram, member energy spectrum vs truth, snapshots. Runs `.tmps/runs_fd/`, eval `.tmps/eval_fd/`.
+
+## D-049 — Flow decoder from PURE NOISE, conditioned on the latent state alone (module 3)
+
+**Date:** 2026-11-13. **Source:** user, restating H5: "(1) from past z_{0..t} the attention module predicts z_{t+1};
+(2) z is Gaussian because it is strongly compressed; (3) build a non-linear decoder using velocity inside the
+distribution to get p(x_{t+1}) instead of a linear mapping decoder"; then chose option (b) "pure noise source with z~
+only" (design record `memory/conditional_forecast_design.md` §14).
+
+- p(x_{t+1}) = ∫ p(x | z) N(z; ẑ, Σ_1) dz. The linear decoder makes p(x | z) one fixed Gaussian (D z + iid residual);
+  the flow learns p(x | z) as a velocity field in x-space, so it may be non-Gaussian and state-dependent.
+- Source x0 = σ0 ε, ε ~ N(0, I), σ0 = 1 (fields ~unit std). Velocity v(x_s, s | z̃): input x_s ONLY, FiLM by (s, z̃).
+  x(t) is NOT read anywhere, so any gain over the linear D(z̃) is non-linear DECODING (removes the F-46 x(t) caveat).
+- Everything else as D-048 step 1 (Σ_1 out-of-fold, cond: sample, lead 1, seed 0, same U-Net, same eval).
+- Code: `FlowDecoder(source="noise"|"launch")`, config `fd.source` (default `noise`); D-048 checkpoints load as
+  `launch`. Run `.tmps/runs_fd/fdnoise_seed0` (`launch_noise.sh`), eval `.tmps/eval_fd/fdnoise_seed0`.
+- Assumption to check later (user point 2): Gaussianity of the latent forecast error (Q-Q of the out-of-fold departures).
+
+## D-050 — The latent state enters the flow SPATIALLY: learned map z~ -> feature grid (module 3)
+
+**Date:** 2026-11-13. **Source:** F-47 (pure-noise flow, FiLM only, ignores z for "where"); user chose option 1
+"learned spatial map of z~" over (2) D(z~) as input channel and (3) coordinate channels.
+
+- A linear layer z~ [K] -> [zmap, 16, 16] (zmap = 32, ~0.35 M params), bilinearly resized to each U-Net resolution,
+  1x1-projected and ADDED to the features in every block, at the FiLM point. FiLM by (s, z~) stays.
+- Still z~ only, source pure noise (D-049): each latent channel learns where it acts on a coarse grid, the network
+  turns that into a field. Not given the frozen linear D, so the comparison with D(z~) stays a decoder vs a decoder.
+- Checked: with zmap = 32 the velocity is no longer x-shift equivariant (gap ~ |v| at shifts 8, 16; FiLM only: 5e-7).
+- Config `fd.zmap` (0 = off; D-048/D-049 checkpoints load with 0). Run `.tmps/runs_fd/fdzmap_seed0`
+  (`launch_zmap.sh`), eval `.tmps/eval_fd/fdzmap_seed0`; same recipe as D-048 step 1 (lead 1, seed 0, cond: sample).
+
+## D-051 — Family-shaped latent prior p(z): the observer's dynamic family sets each channel's error shape (module 3)
+
+**Date:** 2026-11-13. **Source:** user, design record `memory/conditional_forecast_design.md` §15 (Q1-Q3 confirmed one
+at a time). Replaces "stop the over-dispersion fix" as the next configuration.
+
+- Per live channel, around module 2's ẑ, by its observer family (`fam` in module 2's norm.npz): stationary and noise =
+  Gaussian (σ_i from Σ_1); chaotic = uniform ẑ ± √3σ_i at short leads (window widening with lead for long leads);
+  cyclic = ramp + tail along the direction of travel, p(u) ∝ Φ(u/σ_b) exp(-max(0, u - r)²/2σ_t²), r = min(distance
+  to crest/trough, κ · cycle move over the lead); launch state from a sliding cos/sin fit over the last period ending at
+  ẑ (FFT period on [0, t_tr)). σ_b, σ_t, κ by ML on out-of-fold departures.
+- Channels joined by a Gaussian copula (R = correlation of the out-of-fold normal scores, shrunk 10 %).
+- Code: `src/models/family_prior.py` (per-launch quantile tables on a normal-score grid; `sample_from_tables` = one
+  interpolation, ready for decoder training), probe `src/probes/eval_family_prior.py`. Step A = p(z) alone on the true
+  z(t+a); step B (decoder on p(z) draws) only after step A is seen.
+
 ## Numbering collisions with the encoder track
 
 The module-2 (`latent-predictor`) branch and the parallel `stationary-observer` (encoder) session both
@@ -2918,6 +2992,26 @@ hippocampus), persistence `x(t)`, climatology, D-012 pseudo-inverse. Gap ceiling
 1 - ceiling = decoding error. Plus field snapshots (truth / decoder / pseudo-inverse at leads 1, 8, 16, 64).
 Note: persistence and the pseudo-inverse carry the observation noise of `x(t)`, so they sit below 1 already at lead 1.
 
+#### Flow-matching decoder (D-048, 2026-11-12) — a raw-field DISTRIBUTION from a Gaussian latent forecast
+
+Files: `src/models/flow_decoder.py`, `src/train/train_flow_decoder.py`, `config/flow_decoder.yaml`,
+`src/probes/eval_flow_decoder.py`. The linear ridge decoder above stays (it is the baseline and the mean map).
+
+```
+prior     z(t+1) ~ N(zhat(t+1), Sigma_1)       zhat = deterministic twin; Sigma_1 = out-of-fold lead-1 departures
+source    x0 = x(t) + sigma0 eps               the launch field, noised
+target    x1 = x(t+1)                          observed raw field (field units)
+path      x_s = (1-s) x0 + s x1                flow time s, not physical time
+velocity  v(x_s, s | x(t), z~)                 conv U-Net, FiLM by (s, z~); z~ = zhat_oof + Sigma_1^{1/2} eta (cond: sample)
+member m  z~_m ~ N(zhat, Sigma_1), eps_m -> Heun ODE s: 0 -> 1 -> x_m
+```
+
+- `prior.npz` (written by the trainer, in the twin's live channels, canonical z units = S standardized on [0, 8000)):
+  out-of-fold lead-1 forecasts on [0, 8000) (fold k forecasts launches in its block), the twin's validation forecasts,
+  the true z, Sigma_1 and its Cholesky factor.
+- Readout = lead 1 for step 1 (RMSE of the member mean vs observed field, fair CRPS, spread/RMSE, spread-error corr,
+  rank histogram, energy spectrum, snapshots), against the linear-Gaussian baseline on the same latent members.
+
 #### Standardization stays inside the history predictor (user ruling, 2026-10-01)
 
 Question raised by the user: the history comes out of the observer in raw latent units (`S`, levels up to ~-1247,
@@ -3019,3 +3113,29 @@ for clean cycles, and real cycles are harder. User: "let's treat a stationary hi
   hidden-mode ridge readout is fed std-unit states, so it is unaffected by the flag.
 - Readout: same launches; compare against F-27 (`rb10k_all_seed*`) per family and lead, in both units. Known gap: the
   slow rungs at amp_ratio 0.051-0.055 (seeds 1/3/4) are labelled chaotic and are NOT rescaled (labeller unchanged).
+
+## D-052 — Family-shape distribution NETWORK for z(t+1) (module 3, latent side)
+
+**Date:** 2026-11-14. **Source:** user (design record §16): "build a small network which gives a distribution of the
+next prediction of z", in the family shapes of D-051.
+- Scaled error e = (z(t+1) - ẑ(t)) / σ_i. Per family one small MLP (2 x 64, SiLU), shared by its channels + an 8-d channel
+  embedding, outputs that launch's parameters: stationary/noise Gaussian (m, w); cyclic ramp + tail (m, σ_b, σ_t, r;
+  direction s from the sliding fit); chaotic uniform (m, h; edges softened over 0.05).
+- Inputs (past + forecast only): ẑ, z(t), ẑ - z(t), std of last 16 steps; cyclic: cos/sin θ̂, Â, dist/Â, move;
+  chaotic: last 8 values every 2 steps relative to z(t) (D-040 embedding); stationary/noise: mean/std of last 64.
+- Loss: CRPS from the CDF on a grid e ∈ [-8, 8] (641 pts) -- a likelihood is infinite outside a uniform window.
+  Fit [t0, 7750) out-of-fold, select [7750, 8000) (best of every 200 steps, 4000 steps), validation [8000, 10000).
+- Control `gauss_net`: same network and inputs, Gaussian for every family.
+- Code `src/models/family_net.py`, `src/probes/train_family_net.py`; out `.tmps/eval_fn/seed0/`.
+
+## D-053 — Step B: the decoder is trained and read on the launch-conditioned network's p(z) (module 3)
+
+**Date:** 2026-11-14. **Source:** user "1, step B with the decoder" after F-51.
+- p(z) = the ALL-GAUSSIAN network of D-052 (family shapes added nothing, F-51): z~ = ẑ + σ ⊙ (m_t + w_t ⊙ η),
+  η ~ N(0, R), R = correlation of the network's standardized residuals on the fit launches (shrunk 10 %).
+  `family_net.net_prior`; the trainer writes `netprior.npz`, the eval draws members from it when present.
+- Decoder = D-050 (pure noise, zmap 32), `fd.prior: gauss | net`, `fd.prior_net` (the network dir for that lead),
+  `fd.first_launch` 320 for BOTH priors (cycle features need a full period). Leads 1 and 32, seed 0.
+- Caveat: on the TRAINING launches the network's (m, w) are in-sample (it was fitted there; train vs select CRPS
+  differ ~2 %), so the decoder trains on slightly sharp draws; validation draws are out of sample.
+- Runs `.tmps/runs_fd/fdB_l{1,32}_{gauss,net}` (`launch_stepB.sh`), eval `.tmps/eval_fd/fdB_*`.
