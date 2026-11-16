@@ -3169,3 +3169,16 @@ on their family-net shapes).
 - `fd.prior: dramatic` (trainer builds `DramaticSampler` tables for every fit / held-out launch once); otherwise the
   D-053 recipe (D-050 decoder, first_launch 320). Leads 1 and 32, seed 0. Caveat as D-053: networks in-sample on the
   training launches. Runs `.tmps/runs_fd/fdD_l{1,32}` (`launch_dramatic.sh`), eval `.tmps/eval_fd/fdD_l{1,32}/`.
+
+## D-056 — Kernel-aware Gaussian decoder: p(x | z) = N(K⁺S + P_⊥ f(z, K), diag σ²(z)), trained on true pairs (module 3)
+
+**Date:** 2026-11-16. **Source:** user (design record §17-18): decoder "sees the learned kernel as input", maps p(z) to
+p(x) with an error covariance, trained by KL(p(x) || p(x̂)); "Recommended version".
+- Checked first: S = K x exactly (encoder norm none, rel. err 2e-6); live K 43 x 8192, rank 43, cond 63.
+- Architecture: `src/models/kernel_decoder.py` (back-projections z_i m_i [k V ch], K⁺S, Kᵀz, coverage -> U-Net (64,128,192)
+  circular in x, FiLM by z -> f, log σ²; μ = K⁺S + P_⊥ f, |K μ - S| / |S| ~ 5e-7). 4.73 M params.
+- Training `src/train/train_kernel_decoder.py` + `config/kernel_decoder.yaml`: Gaussian NLL on (z(t), x(t)), t < 7750,
+  selection [7750, 8000), 20k steps, EMA; lead-independent, one per observer seed (`.tmps/runs_kd/kd_seed{0..4}`).
+- Readout `src/probes/eval_kernel_decoder.py`: reconstruction from true z; forecasts with the SAME latent samplers as the
+  flow runs (fixed Gaussian, network, exaggerated) at leads 1 / 32 vs the flow decoders; latent log score log p_ẑ(z_true)
+  from each prior's quantile tables + Gaussian copula. Out `.tmps/eval_kd/seed{0..4}/`.

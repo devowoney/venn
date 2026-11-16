@@ -1,0 +1,31 @@
+# VENN module 3 — KERNEL-AWARE GAUSSIAN DECODER (D-056, design record §17-18). Every hyperparameter lives here (D-014).
+# p(x | z) = N(x; K+ S + P_perp f(z, K), diag sigma^2(z)), trained on TRUE (z, x) pairs; lead-independent.
+#   python -m src.train.train_kernel_decoder kd.obs_seed=0
+defaults:
+  - config              # inherit seed / device from the encoder config
+  - _self_
+
+kd:
+  hf_dir: /home/sysadmin/jlee/venn/.claude/worktrees/history-forecastor/.tmps/runs_hf
+  obs_seed: 0           # observer seed; live channels and encoder run from module 2's twin_seed{s}
+  t_tr: 8000            # [0, t_tr) training set; [t_tr, T) validation, never read here
+  t_fit: 7750           # pairs with t < t_fit train; [t_fit, t_tr) = held-out slice for model selection
+  # --- model ---
+  ch: [64, 128, 192]    # U-Net widths at 64, 32, 16 cells (same backbone as the flow decoder)
+  emb: 256
+  logvar_min: -12.0
+  logvar_max: 4.0
+  # --- optimization ---
+  steps: 20000
+  batch: 32
+  lr: 2.0e-4
+  weight_decay: 0.0
+  grad_clip: 1.0
+  ema: 0.999
+  eval_every: 1000
+
+hydra:
+  run:
+    dir: ${hydra:runtime.cwd}/.tmps/runs_kd/${now:%Y%m%d_%H%M%S}
+  job:
+    chdir: true

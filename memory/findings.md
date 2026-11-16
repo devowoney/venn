@@ -2046,3 +2046,52 @@ Seed 0, 2000 validation launches, members from the exaggerated prior; field unit
 - Widest lead-32 cell through 150 launches: truth inside flow 5-95 % 85 % (slightly low); the flow median stays near the
   local mean and the truth's peaks touch the upper band edge. Lead-32 middle cell: the flow distribution sits on the
   truth, the linear one beside it.
+
+### F-55. Seeds 0-4 confirm: the network p(z) is the big gain at lead 32; the exaggerated prior (retrained) is a small, mostly consistent extra (F-52 / F-54, 2026-11-16)
+
+Per seed the full chain (out-of-fold priors, family networks, decoders on three priors, first_launch 320); runs
+`.tmps/runs_fd/fdS{1..4}_l{1,32}_{gauss,net,dramatic}` (`launch_seeds_B.sh`), seed 0 = fdB / fdD. Figure
+`.tmps/eval_fd/seeds_priors.png`. Flow decoder, field units, means over 5 seeds:
+
+| | lead 1 RMSE / CRPS | lead 32 RMSE / CRPS | spread/RMSE (1 / 32) | corr(spread, error) (1 / 32) |
+|---|---|---|---|---|
+| fixed-Gaussian p(z) | 0.0607 / 0.0325 | 0.2324 / 0.0739 | 1.22 / 1.05 | +0.15 / +0.22 |
+| network p(z) | 0.0596 / 0.0320 | 0.2084 / 0.0615 | 1.18 / 1.02 | +0.13 / +0.40 |
+| exaggerated p(z), retrained | 0.0596 / 0.0319 | **0.2076 / 0.0610** | 1.14 / **1.00** | +0.11 / **+0.43** |
+
+- Network vs fixed Gaussian, lead 32 CRPS per seed: -12, -25, -15, -23, -6 % (all seeds); lead 1: -0.6 to -2.8 %.
+- Exaggerated vs network, lead 32 CRPS: -1.3, -1.3, -0.5, +0.3, -1.2 % (4 of 5 better, mean -0.8 %); lead 1 within
+  ±0.3 %. Calibration is best with the exaggerated prior at both leads (spread/RMSE 1.14 / 1.00).
+- Spread follows error at lead 32 for 4 of 5 seeds (+0.27 to +0.63); seed 3 stays at +0.27 with every prior. At lead 1 the
+  per-launch spread signal is weak for all priors (+0.03 to +0.21).
+- The flow beats the linear decoder on every seed, lead and prior (lead 32 means 0.2076-0.2324 vs 0.2284-0.2475).
+
+### F-56. The kernel-aware decoder is exact from the true latent, but loses to the flow on forecasts: the flow's edge was compensating p(ẑ), and the exaggerated prior is badly overconfident (D-056, 2026-11-16)
+
+Seeds 0-4, validation (2000 launches), M = 32, field units; means over seeds.
+
+Reconstruction from the TRUE z (every seed): RMSE 0.0502-0.0507 (obs noise 0.05, linear ceiling 0.0509), mean σ
+0.0499-0.0504, 90 % interval coverage 89.8-89.9 %, |K μ - S| / |S| ~ 5e-7. σ map flat at the noise level with bumps on
+small eddies. p(x | z) is learned exactly and calibrated.
+
+| forecast | kernel RMSE / CRPS / spread/RMSE | flow RMSE / CRPS / spread/RMSE | latent log score log p_ẑ(z_true) |
+|---|---|---|---|
+| lead 1 fixed Gaussian | 0.0643 / 0.0335 / 1.02 | 0.0607 / 0.0325 / 1.22 | 62.5 |
+| lead 1 network | 0.0617 / 0.0326 / 1.01 | 0.0596 / 0.0320 / 1.18 | **63.5** |
+| lead 1 exaggerated | 0.0675 / 0.0353 / **0.84** | 0.0596 / 0.0319 / 1.14 | **-36.6** |
+| lead 32 fixed Gaussian | 0.2470 / 0.0804 / 1.07 | 0.2324 / 0.0739 / 1.05 | **12.7** |
+| lead 32 network | 0.2266 / 0.0723 / 1.02 | 0.2084 / 0.0615 / 1.02 | 6.6 |
+| lead 32 exaggerated | 0.2387 / 0.0812 / **0.82** | 0.2076 / 0.0610 / 1.00 | **-77.5** |
+
+- As the theory of §17 predicts: with a faithful decoder the field forecast is only as good as p(ẑ). The kernel decoder
+  is calibrated where p(ẑ) is (spread/RMSE 1.01-1.07 for Gaussian / network, against the flow's 1.18-1.22 at lead 1: no
+  double counting) but loses in CRPS on every seed (lead 32 network +8 to +32 %).
+- So the flow's advantage (F-52, F-55) is NOT decoding: trained on forecast draws, it learned to correct p(ẑ) (blur,
+  shrink, re-centre). The exaggerated prior "won" with the flow because the flow undid the exaggeration: under the
+  faithful decoder it is the worst (U-shaped rank histogram, spread/RMSE 0.82-0.84) and its latent log score is far
+  below the others (-37 / -78 vs +63 / +7..13) -- narrow stationary and one-sided cyclic ramps put ~zero density
+  where the truth falls.
+- Network vs fixed Gaussian: the network wins CRPS at both leads, but at lead 32 its latent log score is LOWER (6.6 vs
+  12.7; seed 1 -3.5): sharper, with heavier misses in the tails.
+- Latent log score = the prior-dependent part of the exact field log-likelihood (Laplace split). It now ranks priors
+  directly and is the honest target for improving p(ẑ).

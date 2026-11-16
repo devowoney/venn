@@ -273,3 +273,25 @@ small network which gives a distribution of the next prediction of z?" Earlier c
 be Gaussian for stationary and cyclic, they were "reference and idea; the main goal is to make a probability
 distribution". Built: per-launch parameters of the family shapes from a small per-family network, + an all-Gaussian
 control with the same inputs (F-50).
+
+## 17. Mathematics of p(ẑ) -> p(x̂) (user 2026-11-16: "build a mathematical development ... is this justified by this
+flow-matching style decoder?")
+- p(x̂ | H_t) = ∫ p(x | z) p(ẑ = z | H_t) dz under A1 (latent sufficiency, x ⊥ H_t | z; supported by the 0.0509 ceiling).
+  Mixture, not change of variables (43 -> 8192 is not invertible).
+- Flow matching: the CFM minimiser transports N(0, I) to p_train(x | c) (Lipman 2023, Liu 2022, Albergo 2023; W2 bound by
+  the excess loss + ODE error). Ancestral sampling z ~ p(ẑ), ODE -> exact samples of ∫ p_θ(x | z) p(ẑ) dz.
+- GAP: `cond: sample` pairs a FORECAST draw with the outcome, so it learns p(x | "a forecast draw was z̃"), a blurred kernel
+  carrying the forecast uncertainty, which is then sampled again at inference -> uncertainty counted twice (linear toy:
+  ~3 W Σ Wᵀ instead of W Σ Wᵀ). It is the Jensen lower bound E_q log p(x | z) of the mixture likelihood log E_q p(x | z).
+- User idea (refined in 3 turns): "we can estimate p(ẑ) and p(z) ... build a non-linear decoder mapping p(z) to p(x) with
+  a covariance error matrix, by making KL(p(x) || p(x̂))". Then: no extra variable u needed (the error covariance Σ_x
+  gives p(x̂) a density in all 8192 dims); "the linear kernel K is known and invertible" -> K is 43 x 8192, rank 43, cond
+  63: invertible on its row space. With z = Kx known, the Laplace split of the mixture likelihood:
+      KL(p(x) || p(x̂)) ≈ E[-log p_ẑ(K x)] + E[-log N(x; D(Kx), Σ_x)] + const
+  -> the decoder is trained on TRUE pairs only; over time p(x̂) changes only through p(ẑ); the forecast's field score =
+  its latent log score + a fixed decoder term.
+## 18. Kernel-aware decoder (user: "the decoder will see the learned kernel as input and output raw field x"; chose the
+recommended version) -> D-056
+Inputs z_i m_i (each latent painted on its own footprint), K⁺S, Kᵀz, coverage; circular U-Net with FiLM by z; output
+μ = K⁺S + P_⊥ f (K μ = S exactly) and log σ² (diagonal Σ_x); Gaussian NLL on true (z, x) pairs. Alternative offered:
+cross-attention token decoder (one decoder for any mask set).

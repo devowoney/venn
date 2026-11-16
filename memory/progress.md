@@ -2110,3 +2110,8 @@ Then (user) chaotic -> family-net plateau, noise -> family-net Gaussian: field b
 0.0645 vs 0.0601), better calibrated (spread/RMSE 1.00); the noise uniform had been the damage.
 Retrained the decoder on the exaggerated prior (user, D-055 / F-54): lead 1 = net prior (CRPS 0.0316), lead 32 best so
 far (RMSE 0.2053, CRPS 0.0593, spread-error corr +0.63). Next for the user.
+2026-11-16 seeds 1-4 (user, F-55): network p(z) beats the fixed Gaussian at lead 32 on all 5 seeds (CRPS mean 0.0739 ->
+0.0615); the retrained exaggerated prior adds a small extra (0.0610, 4/5 seeds) and the best calibration.
+2026-11-16: math of p(ẑ) -> p(x̂) (§17) and the kernel-aware Gaussian decoder (user, D-056, F-56): exact from the true z
+(noise floor, 90 % coverage 89.9 %), but behind the flow on forecasts; the flow had been correcting p(ẑ); the exaggerated
+prior is overconfident (latent log score -37 / -78). Latent log score now ranks priors. Next for the user.
